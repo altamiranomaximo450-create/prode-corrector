@@ -1,5 +1,6 @@
 import { json, manejarError } from "@/lib/api";
 import { infoAlmacen } from "@/lib/almacen";
+import { supabaseAdminConfigurado, MAX_CHUNK_MB } from "@/lib/almacen/trabajos";
 import { usandoClavePorDefecto, horasSesion } from "@/lib/auth";
 import {
   MAX_PARTIDOS,
@@ -40,6 +41,10 @@ export async function GET() {
       procesamiento: procesamientoHabilitado(),
       maxPartidos: MAX_PARTIDOS,
       maxPdfMb: Math.round((maxPdfBytes() / 1024 / 1024) * 10) / 10,
+      // La subida por chunks (para PDFs grandes) necesita Supabase: sin él,
+      // no hay dónde guardar los chunks ni el progreso del worker.
+      subidaGrandeDisponible: supabaseAdminConfigurado(),
+      maxChunkMb: MAX_CHUNK_MB,
       horasSesion: horasSesion(),
       entorno: process.env.VERCEL ? "vercel" : "local",
       avisos,

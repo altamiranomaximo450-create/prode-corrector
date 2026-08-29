@@ -8,7 +8,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { extraerDocumento } from "./extraer";
+import { extraerDocumento, type DocumentoExtraido } from "./extraer";
 import { analizarDocumento, normalizar, type BoletaCruda } from "./analizar";
 import type {
   Boleta,
@@ -54,7 +54,7 @@ export class ErrorProcesamiento extends Error {
 }
 
 function huellaPronosticos(boleta: Boleta): string {
-  return boleta.pronosticos.map((p) => p.valor ?? "?").join("");
+  return boleta.pronosticos.map((p) => (p.opciones.length ? p.opciones.join("+") : "?")).join("|");
 }
 
 /**
@@ -137,6 +137,7 @@ function aBoleta(cruda: BoletaCruda, fecha: Fecha): Boleta {
   const pronosticos: PronosticoBoleta[] = cruda.valores.map((v, i) => ({
     partidoNumero: i + 1,
     valor: v.valor,
+    opciones: v.opciones,
     origen: "pdf",
     confianza: v.confianza,
     evidencia: v.evidencia,
@@ -163,29 +164,30 @@ function aBoleta(cruda: BoletaCruda, fecha: Fecha): Boleta {
   return boleta;
 }
 
-export async function procesarPdf(
-  datos: Uint8Array,
+/**
+ * Analiza un documento YA EXTRAÍDO (texto + coordenadas) y produce las
+ * boletas. Es el corazón compartido entre:
+ *  - la carga sincrónica de un PDF chico (`procesarPdf`, más abajo), y
+ *  - el worker de PDFs grandes, que arma el `DocumentoExtraido` combinando
+ *    varios chunks extraídos por separado y llama a esta misma función una
+ *    sola vez sobre el documento completo (ver `worker/index.ts`).
+ *
+ * No lee ningún PDF: recibe el documento ya extraído, así el worker nunca
+ * necesita tener los bytes completos del PDF original en memoria a la vez.
+ */
+export async function analizarYConstruir(
+  doc: DocumentoExtraido,
   nombreArchivo: string,
+  bytesTotales: number,
   fecha: Fecha,
   onProgreso: (evento: EventoProgreso) => void,
 ): Promise<ResultadoProceso> {
   const inicio = Date.now();
   const problemasGlobales: ProblemaBoleta[] = [];
 
-  onProgreso({ etapa: "leyendo", mensaje: "Abriendo el PDF...", porcentaje: 4 });
-
-  const doc = await extraerDocumento(datos, (pagina, total) => {
-    onProgreso({
-      etapa: "extrayendo",
-      mensaje: "Extrayendo el texto del PDF...",
-      porcentaje: 5 + Math.round((pagina / Math.max(1, total)) * 45),
-      detalle: `Página ${pagina} de ${total}`,
-    });
-  });
-
   const diagnosticoBase = {
     nombreArchivo,
-    bytes: datos.byteLength,
+    bytes: bytesTotales,
     paginas: doc.paginas.length,
     paginasConTexto: doc.paginasConTexto,
     paginasSinTexto: doc.paginasSinTexto,
@@ -280,4 +282,29 @@ export async function procesarPdf(
   });
 
   return { boletas, diagnostico, problemasGlobales };
+}
+
+/**
+ * Punto de entrada para un PDF chico que entra entero en memoria: lo extrae y
+ * llama a `analizarYConstruir`. Es lo que usa la carga sincrónica (SSE) para
+ * PDFs de hasta el tamaño admitido en una petición.
+ */
+export async function procesarPdf(
+  datos: Uint8Array,
+  nombreArchivo: string,
+  fecha: Fecha,
+  onProgreso: (evento: EventoProgreso) => void,
+): Promise<ResultadoProceso> {
+  onProgreso({ etapa: "leyendo", mensaje: "Abriendo el PDF...", porcentaje: 4 });
+
+  const doc: DocumentoExtraido = await extraerDocumento(datos, (pagina, total) => {
+    onProgreso({
+      etapa: "extrayendo",
+      mensaje: "Extrayendo el texto del PDF...",
+      porcentaje: 5 + Math.round((pagina / Math.max(1, total)) * 45),
+      detalle: `Página ${pagina} de ${total}`,
+    });
+  });
+
+  return analizarYConstruir(doc, nombreArchivo, datos.byteLength, fecha, onProgreso);
 }

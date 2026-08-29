@@ -98,8 +98,8 @@ function dibujarBoleta(pagina, fuentes, topeY, boleta) {
       });
     };
     marcar(boleta.pron[i]);
-    if (boleta.ambiguoEn === i + 1) {
-      // segunda marca en la misma fila: el sistema debe negarse a interpretarla
+    if (boleta.dobleEn === i + 1) {
+      // segunda marca en la misma fila: un "doble" válido (ej. 1/X)
       marcar(boleta.pron[i] === "1" ? "2" : "1");
     }
     y -= 14;

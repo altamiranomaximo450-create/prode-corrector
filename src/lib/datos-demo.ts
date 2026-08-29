@@ -34,8 +34,13 @@ export interface BoletaDemo {
   numero: string;
   nombre: string | null;
   pron: string[];
-  /** Índice 1-based del partido con dos opciones marcadas. */
-  ambiguoEn?: number;
+  /**
+   * Índice 1-based del partido con dos opciones marcadas: un "doble" (ej.
+   * 1/X). Es una jugada normal y válida, no un error — se muestra como aviso,
+   * no bloquea el ranking, y acierta si el resultado oficial es cualquiera de
+   * las dos opciones.
+   */
+  dobleEn?: number;
   caso?: string;
 }
 
@@ -67,8 +72,8 @@ export const BOLETAS_PROBLEMATICAS: BoletaDemo[] = [
     numero: "533",
     nombre: "Julieta Campos",
     pron: ["1", "X", "2", "1", "1", "X", "1", "2", "X", "1"],
-    ambiguoEn: 4,
-    caso: "ambigua",
+    dobleEn: 4,
+    caso: "doble",
   },
   {
     numero: "548",
@@ -145,15 +150,22 @@ function construirBoleta(
 
   for (let i = 0; i < cantidadPartidos; i++) {
     const crudo = demo.pron[i];
-    const ambiguo = demo.ambiguoEn === i + 1;
+    const doble = demo.dobleEn === i + 1;
     const [local, visitante] = evidenciaPartidos[i];
+    const otraOpcion = crudo === "1" ? "2" : "1";
+    const opciones: Pronostico[] = doble
+      ? [crudo as Pronostico, otraOpcion as Pronostico]
+      : crudo
+        ? [crudo as Pronostico]
+        : [];
     pronosticos.push({
       partidoNumero: i + 1,
-      valor: ambiguo || !crudo ? null : (crudo as Pronostico),
+      valor: opciones.length === 1 ? opciones[0] : null,
+      opciones,
       origen: "pdf",
-      confianza: ambiguo || !crudo ? 0 : 0.95,
+      confianza: opciones.length === 1 ? 0.95 : opciones.length === 2 ? 0.85 : 0,
       evidencia: crudo
-        ? `${i + 1} ${local} vs ${visitante}${ambiguo ? "  X  X" : `  ${crudo}`}`
+        ? `${i + 1} ${local} vs ${visitante}${doble ? `  ${crudo}  ${otraOpcion}` : `  ${crudo}`}`
         : "(sin lectura)",
       pagina: crudo ? pagina : null,
     });
@@ -182,20 +194,21 @@ function construirBoleta(
       ),
     );
   }
-  if (demo.ambiguoEn) {
+  if (demo.dobleEn) {
+    const opciones = pronosticos[demo.dobleEn - 1]?.opciones ?? [];
     problemas.push(
       problema(
-        "PRONOSTICO_AMBIGUO",
-        "error",
-        `El partido ${demo.ambiguoEn} tiene más de una opción marcada. No se interpreta.`,
+        "PRONOSTICO_DOBLE",
+        "aviso",
+        `El partido ${demo.dobleEn} tiene un doble marcado: ${opciones.join("/")}.`,
         pagina,
-        pronosticos[demo.ambiguoEn - 1]?.evidencia ?? null,
-        demo.ambiguoEn,
+        pronosticos[demo.dobleEn - 1]?.evidencia ?? null,
+        demo.dobleEn,
       ),
     );
   }
   for (const p of pronosticos) {
-    if (p.valor === null && !demo.ambiguoEn) {
+    if (p.opciones.length === 0) {
       problemas.push(
         problema(
           "PRONOSTICO_FALTANTE",

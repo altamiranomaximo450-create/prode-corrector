@@ -2,7 +2,7 @@
  * Motor de corrección.
  *
  * Función pura: dadas una fecha (con sus partidos y resultados oficiales) y sus
- * boletas, produce el detalle partido a partido, el ranking y el Top 3.
+ * boletas, produce el detalle partido a partido, el ranking y el Top 5.
  *
  * Principios:
  *  - Nunca inventa un pronóstico ni un resultado. Lo que falta, falta.
@@ -33,15 +33,19 @@ export function normalizarNombre(nombre: string | null): string {
     .trim();
 }
 
+function etiquetaOpciones(d: { pronostico: string | null; opciones: string[] }): string {
+  return d.opciones.length ? d.opciones.join("/") : (d.pronostico ?? "—");
+}
+
 function construirExplicacion(fila: Omit<FilaCorreccion, "explicacion">): string {
   const acertados = fila.detalle
     .filter((d) => d.estado === "acierto")
-    .map((d) => `#${d.partidoNumero} ${d.local} vs ${d.visitante} (${d.pronostico})`);
+    .map((d) => `#${d.partidoNumero} ${d.local} vs ${d.visitante} (${etiquetaOpciones(d)})`);
   const fallados = fila.detalle
     .filter((d) => d.estado === "error")
     .map(
       (d) =>
-        `#${d.partidoNumero} ${d.local} vs ${d.visitante} (marcó ${d.pronostico}, salió ${d.resultado})`,
+        `#${d.partidoNumero} ${d.local} vs ${d.visitante} (marcó ${etiquetaOpciones(d)}, salió ${d.resultado})`,
     );
   const sinPronostico = fila.detalle.filter((d) => d.estado === "sin_pronostico");
   const sinResultado = fila.detalle.filter((d) => d.estado === "sin_resultado");
@@ -79,6 +83,9 @@ export function corregirBoleta(fecha: Fecha, boleta: Boleta): FilaCorreccion {
   for (const partido of fecha.partidos) {
     const pron = porNumero.get(partido.numero) ?? null;
     const valor = pron?.valor ?? null;
+    // Compatibilidad: si por algún motivo no viene `opciones` (datos viejos),
+    // se reconstruye a partir de `valor`.
+    const opciones = pron?.opciones ?? (valor ? [valor] : []);
     const resultado = partido.resultado;
 
     let estado: DetallePartido["estado"];
@@ -86,10 +93,12 @@ export function corregirBoleta(fecha: Fecha, boleta: Boleta): FilaCorreccion {
       estado = "sin_resultado";
     } else {
       partidosEvaluados += 1;
-      if (valor === null) {
+      if (opciones.length === 0) {
         estado = "sin_pronostico";
         sinPronostico += 1;
-      } else if (valor === resultado) {
+      } else if (opciones.includes(resultado)) {
+        // Doble o simple: acierta si el resultado oficial está entre las
+        // opciones marcadas.
         estado = "acierto";
         aciertos += 1;
       } else {
@@ -103,6 +112,7 @@ export function corregirBoleta(fecha: Fecha, boleta: Boleta): FilaCorreccion {
       local: partido.local,
       visitante: partido.visitante,
       pronostico: valor,
+      opciones,
       resultado,
       estado,
       evidencia: pron?.evidencia ?? "",
@@ -212,11 +222,11 @@ export function corregirFecha(fecha: Fecha, boletas: Boleta[]): ResultadoCorrecc
   }
   for (const r of ranking) r.empatado = (cuentaPorPosicion.get(r.posicion) ?? 0) > 1;
 
-  const top3: GrupoPuesto[] = [];
-  for (const puesto of [1, 2, 3] as const) {
+  const top5: GrupoPuesto[] = [];
+  for (const puesto of [1, 2, 3, 4, 5] as const) {
     const grupo = ranking.filter((r) => r.posicion === puesto);
     if (grupo.length > 0) {
-      top3.push({
+      top5.push({
         puesto,
         aciertos: grupo[0].aciertos,
         participantes: grupo,
@@ -264,5 +274,5 @@ export function corregirFecha(fecha: Fecha, boletas: Boleta[]): ResultadoCorrecc
     advertencias.push("Todavía no hay boletas cargadas en esta fecha.");
   }
 
-  return { fecha, filas, ranking, enRevision, top3, resumen, advertencias };
+  return { fecha, filas, ranking, enRevision, top5, resumen, advertencias };
 }

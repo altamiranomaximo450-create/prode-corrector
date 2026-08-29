@@ -156,6 +156,7 @@ export default function PaginaBoletas() {
                           <MarcaPronostico
                             key={d.partidoNumero}
                             valor={d.pronostico}
+                            opciones={d.opciones}
                             titulo={`${d.local} vs ${d.visitante}`}
                             tono={
                               d.estado === "acierto"

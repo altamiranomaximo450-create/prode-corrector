@@ -42,9 +42,9 @@ async function fechaConBoletaProblematica() {
     numeroBoleta: "77",
     paginas: [1],
     pronosticos: [
-      { partidoNumero: 1, valor: "1" as const, origen: "pdf" as const, confianza: 0.9, evidencia: "r1", pagina: 1 },
-      { partidoNumero: 2, valor: null, origen: "pdf" as const, confianza: 0, evidencia: "r2 X X", pagina: 1 },
-      { partidoNumero: 3, valor: "2" as const, origen: "pdf" as const, confianza: 0.9, evidencia: "r3", pagina: 1 },
+      { partidoNumero: 1, valor: "1" as const, opciones: ["1" as const], origen: "pdf" as const, confianza: 0.9, evidencia: "r1", pagina: 1 },
+      { partidoNumero: 2, valor: null, opciones: [], origen: "pdf" as const, confianza: 0, evidencia: "r2 X X", pagina: 1 },
+      { partidoNumero: 3, valor: "2" as const, opciones: ["2" as const], origen: "pdf" as const, confianza: 0.9, evidencia: "r3", pagina: 1 },
     ],
     problemas: [
       {

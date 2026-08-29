@@ -24,6 +24,8 @@ export interface InfoSistema {
   procesamiento: boolean;
   maxPartidos: number;
   maxPdfMb: number;
+  subidaGrandeDisponible: boolean;
+  maxChunkMb: number;
   horasSesion: number;
   entorno: string;
   avisos: string[];

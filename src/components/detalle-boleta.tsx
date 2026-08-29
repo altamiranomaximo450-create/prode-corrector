@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useProde } from "./estado";
 import { Iconos, InsigniaEstado, MarcaPronostico, Modal, formatearFechaHora } from "./ui";
-import type { Boleta, FilaCorreccion, Pronostico } from "@/lib/tipos";
+import type { Boleta, FilaCorreccion } from "@/lib/tipos";
 
-const OPCIONES: (Pronostico | "")[] = ["1", "X", "2", ""];
+/** Incluye los tres dobles posibles: son una jugada normal en el Prode. */
+const OPCIONES_EDICION = ["", "1", "X", "2", "1/X", "1/2", "X/2"] as const;
 
 const ETIQUETA_ESTADO: Record<string, string> = {
   acierto: "Acierto",
@@ -36,9 +37,11 @@ export function DetalleBoleta({
   const [editando, setEditando] = useState(false);
   const [participante, setParticipante] = useState(fila.participante ?? "");
   const [numero, setNumero] = useState(fila.numeroBoleta ?? "");
-  const [valores, setValores] = useState<(Pronostico | "")[]>(
-    partidos.map((p) => fila.detalle.find((d) => d.partidoNumero === p.numero)?.pronostico ?? ""),
-  );
+  const etiquetaDe = (p: { numero: number }) => {
+    const d = fila.detalle.find((d) => d.partidoNumero === p.numero);
+    return d?.opciones?.length ? d.opciones.join("/") : (d?.pronostico ?? "");
+  };
+  const [valores, setValores] = useState<string[]>(partidos.map(etiquetaDe));
   const [guardando, setGuardando] = useState(false);
   const [errorGuardar, setErrorGuardar] = useState<string | null>(null);
   const [verCrudo, setVerCrudo] = useState(false);
@@ -46,11 +49,7 @@ export function DetalleBoleta({
   useEffect(() => {
     setParticipante(fila.participante ?? "");
     setNumero(fila.numeroBoleta ?? "");
-    setValores(
-      partidos.map(
-        (p) => fila.detalle.find((d) => d.partidoNumero === p.numero)?.pronostico ?? "",
-      ),
-    );
+    setValores(partidos.map(etiquetaDe));
     setEditando(false);
     setErrorGuardar(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -258,18 +257,18 @@ export function DetalleBoleta({
                           value={valores[i] ?? ""}
                           onChange={(e) => {
                             const copia = [...valores];
-                            copia[i] = e.target.value as Pronostico | "";
+                            copia[i] = e.target.value;
                             setValores(copia);
                           }}
                         >
-                          {OPCIONES.map((o) => (
+                          {OPCIONES_EDICION.map((o) => (
                             <option key={o || "vacio"} value={o}>
                               {o === "" ? "— sin dato —" : o}
                             </option>
                           ))}
                         </select>
                       ) : (
-                        <MarcaPronostico valor={d.pronostico} tono={tono} />
+                        <MarcaPronostico valor={d.pronostico} opciones={d.opciones} tono={tono} />
                       )}
                     </td>
                     <td className="text-center">

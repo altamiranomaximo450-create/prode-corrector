@@ -61,10 +61,14 @@ export const Iconos = {
 
 export function MarcaPronostico({
   valor,
+  opciones,
   tono = "neutro",
   titulo,
 }: {
+  /** Opción única (compatibilidad). Si hay un doble, usar `opciones`. */
   valor: Pronostico | null;
+  /** Todas las opciones marcadas; si trae 2, se muestra como "1/X". */
+  opciones?: Pronostico[];
   tono?: "neutro" | "acierto" | "error" | "vacio";
   titulo?: string;
 }) {
@@ -74,12 +78,14 @@ export function MarcaPronostico({
     error: "bg-red-100 text-red-800 border-red-300",
     vacio: "bg-tinta-50 text-tinta-400 border-dashed border-tinta-300",
   }[tono];
+  const etiqueta = opciones && opciones.length > 1 ? opciones.join("/") : (valor ?? "—");
+  const ancho = etiqueta.length > 1 ? "w-auto px-1.5" : "w-7";
   return (
     <span
       title={titulo}
-      className={`num inline-flex h-7 w-7 items-center justify-center rounded-md border text-sm font-bold ${estilos}`}
+      className={`num inline-flex h-7 ${ancho} items-center justify-center rounded-md border text-sm font-bold ${estilos}`}
     >
-      {valor ?? "—"}
+      {etiqueta}
     </span>
   );
 }
@@ -231,7 +237,13 @@ export function Metrica({
   );
 }
 
-export const MEDALLAS: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
+export const MEDALLAS: Record<number, string> = {
+  1: "🥇",
+  2: "🥈",
+  3: "🥉",
+  4: "4️⃣",
+  5: "5️⃣",
+};
 
 export function formatearFechaHora(iso: string): string {
   try {

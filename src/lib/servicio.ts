@@ -67,6 +67,26 @@ function normalizarPronostico(v: unknown): Pronostico | null {
   throw new ErrorValidacion(`"${v}" no es un pronóstico válido. Sólo se acepta 1, X o 2.`);
 }
 
+/**
+ * Igual que `normalizarPronostico`, pero admite un "doble" (dos opciones
+ * marcadas, ej. "1/X"): una jugada normal en el Prode, no un error. Acepta un
+ * string ("1", "1/X", "1X") o un array (["1","X"]).
+ */
+function normalizarOpciones(v: unknown): Pronostico[] {
+  if (v === null || v === undefined || v === "") return [];
+  const piezas: unknown[] = Array.isArray(v)
+    ? v
+    : String(v)
+        .split(/[/,\s]+/)
+        .flatMap((s) => (s.length > 1 && !/^(1|X|2|L|E|V)$/i.test(s) ? s.split("") : [s]))
+        .filter(Boolean);
+  const opciones = [...new Set(piezas.map((p) => normalizarPronostico(p)).filter((p): p is Pronostico => p !== null))];
+  if (opciones.length > 2) {
+    throw new ErrorValidacion("Un pronóstico admite como máximo dos opciones (un doble).");
+  }
+  return opciones;
+}
+
 function texto(v: unknown, campo: string, maximo = 120): string {
   if (typeof v !== "string") throw new ErrorValidacion(`Falta ${campo}.`, campo);
   const limpio = v.trim().replace(/\s+/g, " ");
@@ -304,7 +324,7 @@ export async function listarFechasConResumen(): Promise<ResumenListado[]> {
       participantes: correccion.resumen.participantes,
       enRevision: correccion.resumen.boletasEnRevision,
       mejorPuntaje: correccion.resumen.maximoAciertos,
-      podio: correccion.top3.map((g) => ({
+      podio: correccion.top5.map((g) => ({
         puesto: g.puesto,
         nombres: g.participantes.map((p) => p.participante ?? "(sin nombre)"),
         aciertos: g.aciertos,
@@ -335,17 +355,20 @@ export interface EntradaBoleta {
  * bloqueando hasta que alguien los dé por revisados a conciencia.
  */
 function depurarProblemasResueltos(boleta: Boleta): void {
-  const valorDe = (numero: number) =>
-    boleta.pronosticos.find((p) => p.partidoNumero === numero)?.valor ?? null;
-  const todosLegibles = boleta.pronosticos.every((p) => p.valor !== null);
+  const opcionesDe = (numero: number) =>
+    boleta.pronosticos.find((p) => p.partidoNumero === numero)?.opciones ?? [];
+  const todosLegibles = boleta.pronosticos.every((p) => p.opciones.length >= 1);
   const cantidadCompleta = boleta.pronosticos.length > 0 && todosLegibles;
 
   boleta.problemas = boleta.problemas.filter((problema) => {
     switch (problema.codigo) {
       case "PRONOSTICO_AMBIGUO":
       case "PRONOSTICO_FALTANTE":
-        // Resuelto si ese partido ya tiene un valor.
-        return !(problema.partidoNumero !== null && valorDe(problema.partidoNumero) !== null);
+        // Resuelto si ese partido ya tiene alguna opción marcada (1 o 2).
+        return !(problema.partidoNumero !== null && opcionesDe(problema.partidoNumero).length >= 1);
+      case "PRONOSTICO_DOBLE":
+        // El aviso de doble ya no aplica si ese partido dejó de tener dos opciones.
+        return !(problema.partidoNumero !== null && opcionesDe(problema.partidoNumero).length !== 2);
       case "CANTIDAD_PRONOSTICOS":
       case "BOLETA_INCOMPLETA":
       case "SEGMENTO_SIN_DATOS":
@@ -413,16 +436,22 @@ export async function actualizarBoleta(
     }
     const nuevos: PronosticoBoleta[] = entrada.pronosticos.map((v, i) => {
       const anterior = boleta.pronosticos.find((p) => p.partidoNumero === i + 1);
-      const valor = normalizarPronostico(v);
-      const cambio = (anterior?.valor ?? null) !== valor;
+      const opciones = normalizarOpciones(v);
+      const valor = opciones.length === 1 ? opciones[0] : null;
+      const anterioresOpciones = anterior?.opciones ?? (anterior?.valor ? [anterior.valor] : []);
+      const cambio =
+        anterioresOpciones.length !== opciones.length ||
+        anterioresOpciones.some((o) => !opciones.includes(o));
       if (cambio) {
+        const etiqueta = (o: Pronostico[]) => (o.length ? o.join("/") : "(vacío)");
         cambios.push(
-          `partido ${i + 1}: ${anterior?.valor ?? "(vacío)"} -> ${valor ?? "(vacío)"}`,
+          `partido ${i + 1}: ${etiqueta(anterioresOpciones)} -> ${etiqueta(opciones)}`,
         );
       }
       return {
         partidoNumero: i + 1,
         valor,
+        opciones,
         origen: cambio ? "manual" : (anterior?.origen ?? "manual"),
         confianza: cambio ? 1 : (anterior?.confianza ?? 0),
         evidencia: cambio
@@ -485,14 +514,18 @@ export async function crearBoletaManual(
     );
   }
 
-  const pronosticos: PronosticoBoleta[] = entrada.pronosticos.map((v, i) => ({
-    partidoNumero: i + 1,
-    valor: normalizarPronostico(v),
-    origen: "manual",
-    confianza: 1,
-    evidencia: "Cargado a mano por el administrador.",
-    pagina: null,
-  }));
+  const pronosticos: PronosticoBoleta[] = entrada.pronosticos.map((v, i) => {
+    const opciones = normalizarOpciones(v);
+    return {
+      partidoNumero: i + 1,
+      valor: opciones.length === 1 ? opciones[0] : null,
+      opciones,
+      origen: "manual",
+      confianza: 1,
+      evidencia: "Cargado a mano por el administrador.",
+      pagina: null,
+    };
+  });
 
   const ahora = new Date().toISOString();
   const boleta: Boleta = {
@@ -504,7 +537,7 @@ export async function crearBoletaManual(
     numeroBoleta,
     paginas: [],
     pronosticos,
-    problemas: pronosticos.some((p) => p.valor === null)
+    problemas: pronosticos.some((p) => p.opciones.length === 0)
       ? [
           {
             codigo: "BOLETA_INCOMPLETA",

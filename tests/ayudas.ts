@@ -28,7 +28,7 @@ export function crearFecha(
 export function crearBoleta(
   id: string,
   participante: string | null,
-  pronosticos: (Pronostico | null)[],
+  pronosticos: (Pronostico | Pronostico[] | null)[],
   opciones: Partial<Boleta> = {},
 ): Boleta {
   const problemas: ProblemaBoleta[] = opciones.problemas ?? [];
@@ -40,14 +40,18 @@ export function crearBoleta(
     participanteEvidencia: participante ? `Participante: ${participante}` : null,
     numeroBoleta: opciones.numeroBoleta ?? (id.replace(/\D/g, "") || null),
     paginas: [1],
-    pronosticos: pronosticos.map((v, i) => ({
-      partidoNumero: i + 1,
-      valor: v,
-      origen: "pdf" as const,
-      confianza: v ? 0.95 : 0,
-      evidencia: `renglon ${i + 1}`,
-      pagina: 1,
-    })),
+    pronosticos: pronosticos.map((v, i) => {
+      const lista = v === null ? [] : Array.isArray(v) ? v : [v];
+      return {
+        partidoNumero: i + 1,
+        valor: lista.length === 1 ? lista[0] : null,
+        opciones: lista,
+        origen: "pdf" as const,
+        confianza: lista.length ? 0.95 : 0,
+        evidencia: `renglon ${i + 1}`,
+        pagina: 1,
+      };
+    }),
     problemas,
     estado: problemas.some((p) => p.severidad === "error") ? "revision" : "ok",
     textoCrudo: "texto de prueba",

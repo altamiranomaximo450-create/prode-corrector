@@ -94,8 +94,9 @@ describe("detección de problemas en el PDF con casos difíciles", () => {
 
     // Boleta con 9 renglones en vez de 10.
     expect(codigosDe("512")).toContain("CANTIDAD_PRONOSTICOS");
-    // Boleta con dos opciones marcadas en el partido 4.
-    expect(codigosDe("533")).toContain("PRONOSTICO_AMBIGUO");
+    // Boleta con un doble marcado en el partido 4: es válido, no un error.
+    expect(codigosDe("533")).toContain("PRONOSTICO_DOBLE");
+    expect(codigosDe("533")).not.toContain("PRONOSTICO_AMBIGUO");
     // Boleta sin nombre de participante.
     expect(codigosDe("548")).toContain("NOMBRE_NO_DETECTADO");
     // "Juan Perez" aparece en tres boletas.
@@ -104,24 +105,33 @@ describe("detección de problemas en el PDF con casos difíciles", () => {
     expect(codigosDe("184")).toContain("DUPLICADO_BOLETA");
   }, 30_000);
 
-  it("no interpreta el pronóstico ambiguo: lo deja en null", async () => {
+  it("lee el doble como dos opciones válidas, sin bloquear la boleta", async () => {
     const { boletas } = await procesar("boletas-fecha-12-con-errores.pdf");
     const julieta = boletas.find((b) => b.participante === "Julieta Campos")!;
 
     expect(julieta.pronosticos[3].valor).toBeNull();
-    expect(julieta.estado).toBe("revision");
+    expect(julieta.pronosticos[3].opciones.sort()).toEqual(["1", "2"]);
+    // El doble es sólo un aviso: la boleta no queda bloqueada.
+    expect(julieta.estado).toBe("ok");
   }, 30_000);
 
-  it("las boletas problemáticas quedan fuera del ranking hasta resolverse", async () => {
+  it("las boletas problemáticas quedan fuera del ranking hasta resolverse (el doble sí entra)", async () => {
     const fecha = fechaDemo();
     const { boletas } = await procesar("boletas-fecha-12-con-errores.pdf");
     const correccion = corregirFecha(fecha, boletas);
 
-    expect(correccion.enRevision.length).toBeGreaterThanOrEqual(5);
+    // 4 casos siguen bloqueando (incompleta, sin nombre, 2 duplicados); el
+    // doble ya no es uno de ellos.
+    expect(correccion.enRevision.length).toBeGreaterThanOrEqual(4);
     expect(correccion.ranking.every((r) => r.elegible)).toBe(true);
     // Ana Torres acertó los 10: tiene que encabezar el ranking.
     expect(correccion.ranking[0].participante).toBe("Ana Torres");
     expect(correccion.ranking[0].aciertos).toBe(10);
+    // Julieta Campos: el doble en el partido 4 (1/2) coincide con el
+    // resultado oficial "1" -> acierta ese partido.
+    const julieta = correccion.ranking.find((r) => r.participante === "Julieta Campos");
+    expect(julieta).toBeDefined();
+    expect(julieta!.detalle[3].estado).toBe("acierto");
   }, 30_000);
 
   it("rechaza un archivo que no es un PDF con capa de texto", async () => {

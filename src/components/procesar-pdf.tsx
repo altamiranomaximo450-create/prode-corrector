@@ -1,8 +1,17 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useRef, useState } from "react";
 import { useProde } from "./estado";
 import { Iconos } from "./ui";
+
+// pdf-lib y @supabase/supabase-js sólo hacen falta para PDFs grandes: se
+// cargan recién si el archivo elegido supera el límite sincrónico, así el
+// resto del panel (incluida "Nueva fecha") no paga ese peso en el bundle.
+const SubidaGrandePdf = dynamic(
+  () => import("./subida-grande").then((m) => m.SubidaGrandePdf),
+  { loading: () => <p className="text-sm text-tinta-500">Cargando el subidor de archivos grandes...</p> },
+);
 
 export interface EventoStream {
   etapa: string;
@@ -217,6 +226,17 @@ export function SubirPdf({ fechaId, esDemo }: { fechaId: string; esDemo: boolean
 
   const maxMb = sistema?.maxPdfMb ?? 25;
   const habilitado = sistema?.procesamiento !== false && !esDemo;
+  const excedeLimite = archivo && archivo.size > maxMb * 1024 * 1024;
+
+  if (excedeLimite && sistema?.subidaGrandeDisponible) {
+    return (
+      <SubidaGrandePdf
+        fechaId={fechaId}
+        maxPdfSincronoMb={maxMb}
+        onTerminado={() => void refrescarTodo()}
+      />
+    );
+  }
 
   async function ejecutar() {
     if (!archivo) return;

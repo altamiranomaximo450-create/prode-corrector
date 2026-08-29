@@ -10,12 +10,16 @@ const TITULOS: Record<number, string> = {
   1: "PRIMER PUESTO",
   2: "SEGUNDO PUESTO",
   3: "TERCER PUESTO",
+  4: "CUARTO PUESTO",
+  5: "QUINTO PUESTO",
 };
 
 const ESTILOS: Record<number, string> = {
   1: "from-amber-100 to-amber-50 border-amber-300",
   2: "from-tinta-100 to-tinta-50 border-tinta-300",
   3: "from-orange-100 to-orange-50 border-orange-300",
+  4: "from-sky-100 to-sky-50 border-sky-300",
+  5: "from-violet-100 to-violet-50 border-violet-300",
 };
 
 export default function PaginaGanadores() {
@@ -24,7 +28,7 @@ export default function PaginaGanadores() {
 
   if (cargandoFecha || !correccion) return <Cargando texto="Buscando a los ganadores…" />;
 
-  const { top3, resumen, fecha } = correccion;
+  const { top5, resumen, fecha } = correccion;
   const detalle = correccion.filas.find((f) => f.boletaId === seleccionada);
 
   return (
@@ -53,7 +57,7 @@ export default function PaginaGanadores() {
         </div>
       )}
 
-      {top3.length === 0 ? (
+      {top5.length === 0 ? (
         <div className="tarjeta">
           <Vacio
             titulo="Todavía no hay podio"
@@ -61,8 +65,8 @@ export default function PaginaGanadores() {
           />
         </div>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-3">
-          {top3.map((grupo) => (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          {top5.map((grupo) => (
             <div
               key={grupo.puesto}
               className={`rounded-xl border bg-gradient-to-b p-6 text-center ${ESTILOS[grupo.puesto]}`}
@@ -112,7 +116,7 @@ export default function PaginaGanadores() {
         </div>
       )}
 
-      {top3.some((g) => g.empate) && (
+      {top5.some((g) => g.empate) && (
         <div className="aviso-info mt-5">
           <Iconos.lupa className="h-5 w-5 shrink-0" />
           <p>

@@ -65,10 +65,14 @@ const MARCAS = /^[xX✓✔✗✘●•·*+]$/;
 /* -------------------------------------------------------------------------- */
 
 export interface ValorLeido {
+  /** Opción única, o `null` si hay 0, 2 (doble) o 3+ (ambiguo real) marcas. */
   valor: Pronostico | null;
+  /** Todas las marcas distintas encontradas para este partido. */
+  opciones: Pronostico[];
   evidencia: string;
   pagina: number | null;
   confianza: number;
+  /** true sólo si hay 3 marcas (todas las opciones): no es un doble válido. */
   ambiguo: boolean;
 }
 
@@ -308,12 +312,16 @@ function modoGrilla(lineas: Linea[]): LecturaModo | null {
     }
     if (golpes.length === 0) continue;
     const distintos = [...new Set(golpes)];
+    // Dos marcas es un "doble" válido y normal en el Prode (ej. "1/X"), no un
+    // error de lectura. Sólo tres marcas (todas las columnas) es ambiguo de
+    // verdad: ahí no hay forma de saber qué quiso decir el participante.
     valores.push({
       valor: distintos.length === 1 ? distintos[0] : null,
+      opciones: distintos,
       evidencia: linea.texto,
       pagina: linea.pagina,
-      confianza: distintos.length === 1 ? 0.95 : 0,
-      ambiguo: distintos.length > 1,
+      confianza: distintos.length === 1 ? 0.95 : distintos.length === 2 ? 0.85 : 0,
+      ambiguo: distintos.length >= 3,
     });
   }
 
@@ -335,6 +343,7 @@ function modoLineaFinal(lineas: Linea[]): LecturaModo | null {
     if (PALABRAS_ESTRUCTURA.has(normalizar(resto).replace(/[^a-z]/g, ""))) continue;
     valores.push({
       valor,
+      opciones: [valor],
       evidencia: linea.texto,
       pagina: linea.pagina,
       confianza: 0.9,
@@ -355,26 +364,34 @@ function modoLineaFinal(lineas: Linea[]): LecturaModo | null {
  */
 function modoNumerado(lineas: Linea[], esperado: number): LecturaModo | null {
   const mapa = new Map<number, ValorLeido>();
-  const re = /^\s*(?:partido\s*)?(\d{1,2})\s*(?:[).:\-–]\s*|\s)\s*([1xX2])\s*$/;
+  // Admite un doble pegado al número: "3) 1/X", "3) 1X".
+  const re = /^\s*(?:partido\s*)?(\d{1,2})\s*(?:[).:\-–]\s*|\s)\s*([1xX2])\s*\/?\s*([1xX2])?\s*$/;
   for (const linea of lineas) {
     const m = linea.texto.match(re);
     if (!m) continue;
     const numero = Number(m[1]);
     if (!Number.isFinite(numero) || numero < 1 || numero > esperado) continue;
-    const valor = etiquetaColumna(m[2]);
-    if (!valor) continue;
+    const a = etiquetaColumna(m[2]);
+    const b = m[3] ? etiquetaColumna(m[3]) : null;
+    if (!a) continue;
+    const opciones = [...new Set([a, ...(b ? [b] : [])])];
     if (mapa.has(numero)) {
       const previo = mapa.get(numero)!;
-      if (previo.valor !== valor) {
-        mapa.set(numero, { ...previo, valor: null, confianza: 0, ambiguo: true });
-      }
+      const combinadas = [...new Set([...previo.opciones, ...opciones])];
+      mapa.set(numero, {
+        ...previo,
+        opciones: combinadas,
+        valor: combinadas.length === 1 ? combinadas[0] : null,
+        ambiguo: combinadas.length >= 3,
+      });
       continue;
     }
     mapa.set(numero, {
-      valor,
+      valor: opciones.length === 1 ? opciones[0] : null,
+      opciones,
       evidencia: linea.texto,
       pagina: linea.pagina,
-      confianza: 0.92,
+      confianza: opciones.length === 1 ? 0.92 : 0.82,
       ambiguo: false,
     });
   }
@@ -386,6 +403,7 @@ function modoNumerado(lineas: Linea[], esperado: number): LecturaModo | null {
     valores.push(
       v ?? {
         valor: null,
+        opciones: [],
         evidencia: `(no se encontró el renglón del partido ${i})`,
         pagina: null,
         confianza: 0,
@@ -407,13 +425,17 @@ function modoSecuencia(lineas: Linea[], esperado: number): LecturaModo | null {
     }
   }
   if (items.length !== esperado) return null;
-  const valores: ValorLeido[] = items.map((it) => ({
-    valor: etiquetaColumna(it.char)!,
-    evidencia: it.linea.texto,
-    pagina: it.linea.pagina,
-    confianza: 0.7,
-    ambiguo: false,
-  }));
+  const valores: ValorLeido[] = items.map((it) => {
+    const valor = etiquetaColumna(it.char)!;
+    return {
+      valor,
+      opciones: [valor],
+      evidencia: it.linea.texto,
+      pagina: it.linea.pagina,
+      confianza: 0.7,
+      ambiguo: false,
+    };
+  });
   return { modo: "secuencia", valores, confianzaModo: 0.7 };
 }
 
@@ -628,6 +650,7 @@ function construirBoleta(segmento: Segmento, opciones: OpcionesAnalisis): Boleta
     while (valores.length < cantidadPartidos) {
       valores.push({
         valor: null,
+        opciones: [],
         evidencia: "(sin lectura)",
         pagina: null,
         confianza: 0,
@@ -638,22 +661,37 @@ function construirBoleta(segmento: Segmento, opciones: OpcionesAnalisis): Boleta
 
   valores.forEach((v, i) => {
     if (v.ambiguo) {
+      // Tres (o más) marcas en el mismo partido: eso sí es un error de
+      // lectura, no un doble. No hay forma de saber qué quiso decir.
       problemas.push(
         problema(
           "PRONOSTICO_AMBIGUO",
           "error",
-          `El partido ${i + 1} tiene más de una opción marcada. No se interpreta.`,
+          `El partido ${i + 1} tiene ${v.opciones.length} opciones marcadas (${v.opciones.join("/")}). No es un doble válido: no se interpreta.`,
           v.pagina,
           v.evidencia,
           i + 1,
         ),
       );
-    } else if (v.valor === null && lectura) {
+    } else if (v.opciones.length === 0 && lectura) {
       problemas.push(
         problema(
           "PRONOSTICO_FALTANTE",
           "error",
           `El partido ${i + 1} no tiene un pronóstico legible.`,
+          v.pagina,
+          v.evidencia,
+          i + 1,
+        ),
+      );
+    } else if (v.opciones.length === 2) {
+      // Doble: jugada normal y válida en el Prode. No bloquea el ranking;
+      // acierta si el resultado oficial coincide con cualquiera de las dos.
+      problemas.push(
+        problema(
+          "PRONOSTICO_DOBLE",
+          "aviso",
+          `El partido ${i + 1} tiene un doble marcado: ${v.opciones.join("/")}.`,
           v.pagina,
           v.evidencia,
           i + 1,
@@ -700,7 +738,8 @@ function puntuarBoletas(boletas: BoletaCruda[], esperado: number): number {
     if (b.cantidadLeida === esperado) puntaje += 8;
     else puntaje -= Math.min(8, Math.abs(b.cantidadLeida - esperado));
 
-    const legibles = b.valores.filter((v) => v.valor !== null).length;
+    // Un doble (2 opciones) es legible y válido, aunque `valor` quede en null.
+    const legibles = b.valores.filter((v) => v.opciones.length >= 1 && v.opciones.length <= 2).length;
     puntaje += (legibles / Math.max(1, esperado)) * 4;
 
     if (b.participante) puntaje += b.participanteConfianza > 0.8 ? 3 : 1.5;

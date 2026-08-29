@@ -14,9 +14,12 @@
     "test:watch": "vitest",
     "demo:pdf": "node scripts/generar-pdf-demo.mjs",
     "probar-pdf": "node scripts/probar-analisis.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "worker": "tsx watch worker/index.ts",
+    "worker:once": "tsx worker/index.ts --once"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.48.1",
     "exceljs": "^4.4.0",
     "next": "^15.5.24",
     "pdf-lib": "^1.17.1",
@@ -30,6 +33,7 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "tailwindcss": "^4.1.13",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^3.2.4"
   },

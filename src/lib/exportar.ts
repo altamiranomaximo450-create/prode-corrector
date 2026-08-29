@@ -27,6 +27,10 @@ function simbolo(estado: FilaCorreccion["detalle"][number]["estado"]): string {
   }
 }
 
+function etiquetaOpciones(d: { pronostico: string | null; opciones: string[] }): string {
+  return d.opciones.length ? d.opciones.join("/") : (d.pronostico ?? "-");
+}
+
 function estadoLegible(fila: FilaCorreccion): string {
   if (fila.estado === "revision") return "REQUIERE REVISION MANUAL";
   if (fila.estado === "resuelta_manual") return "Revisada a mano";
@@ -101,7 +105,7 @@ export function aCsv(correccion: ResultadoCorreccion): string {
       fila.paginas.join(" "),
     ];
     const detalle = fila.detalle.map(
-      (d) => `${d.pronostico ?? "-"} / ${d.resultado ?? "-"} / ${simbolo(d.estado)}`,
+      (d) => `${etiquetaOpciones(d)} / ${d.resultado ?? "-"} / ${simbolo(d.estado)}`,
     );
     lineas.push([...base, ...detalle].map(celda).join(SEP));
   }
@@ -195,7 +199,7 @@ export async function aXlsx(correccion: ResultadoCorreccion): Promise<Buffer> {
       fila.porcentaje / 100,
       estadoLegible(fila),
       fila.paginas.join(", "),
-      ...fila.detalle.map((d) => d.pronostico ?? "—"),
+      ...fila.detalle.map((d) => etiquetaOpciones(d)),
     ]);
     r.getCell(7).numFmt = "0.0%";
     fila.detalle.forEach((d, i) => {
@@ -242,7 +246,7 @@ export async function aXlsx(correccion: ResultadoCorreccion): Promise<Buffer> {
         d.partidoNumero,
         d.local,
         d.visitante,
-        d.pronostico ?? "—",
+        etiquetaOpciones(d),
         d.resultado ?? "—",
         simbolo(d.estado),
         d.evidencia,

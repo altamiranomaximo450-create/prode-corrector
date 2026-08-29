@@ -3,7 +3,10 @@
 Plataforma web para corregir automáticamente las boletas de una fecha del Prode:
 se sube el PDF con todas las boletas, se cargan los resultados oficiales y el
 sistema extrae cada boleta, la valida, compara pronóstico por pronóstico, arma
-el ranking, el Top 3 y permite exportar todo.
+el ranking, el Top 5 y permite exportar todo. Admite PDFs de cientos de MB
+(se suben por partes, directo a Supabase Storage, y los procesa un worker
+aparte) y los "dobles" (dos pronósticos marcados en el mismo partido, ej.
+"1/X"): son una jugada normal en el Prode, no un error.
 
 **Regla de diseño número uno: el sistema nunca adivina.** Si una boleta no se
 puede leer con certeza, queda marcada como `REQUIERE REVISIÓN MANUAL`, se
@@ -41,7 +44,7 @@ y editá `ADMIN_PASSWORD`.
 | `npm run dev` | Levanta el servidor de desarrollo |
 | `npm run build` | Compila para producción |
 | `npm start` | Sirve la versión compilada |
-| `npm test` | Corre las 43 pruebas automáticas |
+| `npm test` | Corre las 46 pruebas automáticas |
 | `npm run typecheck` | Verifica los tipos de TypeScript |
 | `npm run demo:pdf` | Regenera los PDF de prueba de `public/demo/` |
 | `npm run probar-pdf -- ruta/al/archivo.pdf 10` | Diagnostica un PDF real desde la terminal |
@@ -81,6 +84,15 @@ efectivamente ocurrió.
 
 **Ojo:** al procesar un PDF se reemplazan *todas* las boletas de esa fecha,
 incluidas las correcciones manuales. El sistema pide confirmación antes.
+
+### Si el PDF es grande (arriba del tope sincrónico)
+
+Desde **Boletas → Subir PDF**, si elegís un archivo más grande que el tope
+mostrado (con Supabase configurado), el panel cambia solo a la carga por
+partes: sube el archivo directo a Storage y un worker aparte lo procesa,
+mostrando progreso real ("Página 721 de 1800") y sin perder el avance si se
+corta. Ver la sección 11 más abajo para la arquitectura completa y cómo
+arrancar el worker.
 
 ### Qué tipo de PDF acepta
 
@@ -146,7 +158,8 @@ Lo que el sistema detecta:
 | `NOMBRE_NO_DETECTADO` | No se encontró el participante |
 | `NOMBRE_DUDOSO` | El nombre se dedujo sin etiqueta explícita (aviso) |
 | `CANTIDAD_PRONOSTICOS` | Se leyeron más o menos pronósticos que partidos |
-| `PRONOSTICO_AMBIGUO` | Dos opciones marcadas en el mismo partido |
+| `PRONOSTICO_AMBIGUO` | Tres o más opciones marcadas en el mismo partido (no es un doble válido) |
+| `PRONOSTICO_DOBLE` | Doble marcado (dos opciones, ej. "1/X") — aviso, **no bloquea**: acierta si el resultado oficial es cualquiera de las dos |
 | `PRONOSTICO_FALTANTE` | Un partido quedó sin marca legible |
 | `DUPLICADO_BOLETA` | Boleta idéntica repetida (¿hoja escaneada dos veces?) |
 | `DUPLICADO_PARTICIPANTE` | El mismo participante en varias boletas |
@@ -218,7 +231,8 @@ Botones **CSV** y **Excel** arriba a la derecha en **Ranking**.
 | Generación de PDF de prueba | **pdf-lib** | Para fabricar boletas de prueba con el mismo formato que las reales |
 | Excel | **exceljs** | Genera .xlsx reales con formato, sólo en el servidor |
 | Base de datos | **Supabase (Postgres) vía API REST**, o archivos JSON, o memoria | Ver abajo |
-| Pruebas | **Vitest** | 43 pruebas, incluida una que procesa un PDF real de punta a punta |
+| Pruebas | **Vitest** | 46 pruebas, incluida una que procesa un PDF real de punta a punta |
+| PDFs grandes | **Supabase Storage** (subida resumible por chunks) + worker Node aparte (`tsx`) | Vercel no acepta cuerpos de más de ~4,5 MB ni procesos de más de 60s; el PDF se sube directo a Storage y un proceso fuera de Vercel lo procesa por partes |
 | Sesión | Cookie firmada con HMAC-SHA256 (Web Crypto) | Sin dependencias ni servicio externo de autenticación |
 
 **Sin servicios externos de IA ni de OCR.** Todo el análisis del PDF corre en el
@@ -239,19 +253,24 @@ src/
     datos-demo.ts       Datos ficticios (origen único, compartido con el generador de PDF)
     pdf/
       extraer.ts        PDF -> texto con coordenadas (no interpreta nada)
-      analizar.ts       Texto -> boletas (estrategias + validación)
-      procesar.ts       Orquestador, duplicados, progreso
+      analizar.ts       Texto -> boletas (estrategias + validación, incluidos los dobles)
+      procesar.ts       Orquestador: extraer + analizar (PDF chico o combinado)
+      combinar.ts       Junta las páginas de varios chunks en un solo documento
     almacen/
       tipos.ts          Contrato de persistencia
       archivo.ts        Archivos JSON (desarrollo)
       memoria.ts        En memoria (demo sin base de datos)
       supabase.ts       Postgres vía REST (producción)
+      trabajos.ts       Trabajos de PDF grande + Storage (sólo con Supabase)
   app/
-    api/                Rutas del backend
+    api/                Rutas del backend (incluida api/fechas/[id]/subida/*)
     (panel)/            Pantallas del panel
     ingresar/           Login
-  components/           Interfaz
+  components/           Interfaz (incluido subida-grande.tsx)
   middleware.ts         Puerta: protege páginas y API
+worker/
+  index.ts              Worker de PDFs grandes (corre aparte, no en Vercel)
+  env.ts                Carga .env/.env.local para el worker
 ```
 
 Las capas están separadas de verdad: el motor de corrección no sabe que existe
@@ -327,10 +346,14 @@ dejalo vacío. El resto (framework, comandos) lo detecta solo.
 | `SESSION_SECRET` | Cadena aleatoria larga | **Sí** |
 | `STORAGE_DRIVER` | `supabase` | Sí, para que persista |
 | `SUPABASE_URL` | Project URL | Con `supabase` |
-| `SUPABASE_SERVICE_ROLE_KEY` | Clave *service_role* | Con `supabase` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Clave *service_role* (secreta) | Con `supabase` |
+| `NEXT_PUBLIC_SUPABASE_URL` | Igual a `SUPABASE_URL` | Para PDFs grandes |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Clave *anon*/*publishable* (pública, no es secreta) | Para PDFs grandes |
+| `PRODE_PDF_BUCKET` | `prode-pdfs` | No (ese es el default) |
+| `MAX_CHUNK_MB` | `45` | No |
 | `DEMO_MODE` | `on` / `off` | No (por defecto `on`) |
 | `PROCESAMIENTO_HABILITADO` | `on` / `off` | No (por defecto `on`) |
-| `MAX_PDF_MB` | Tope de tamaño de PDF | No |
+| `MAX_PDF_MB` | Tope del PDF sincrónico (chico) | No |
 
 Generá el secreto con:
 
@@ -343,13 +366,19 @@ preferible que nadie entre a que quede abierto con la clave de desarrollo.
 
 ### Paso 4 — Tener en cuenta
 
-- **Tamaño del PDF:** Vercel no acepta cuerpos de petición de más de ~4,5 MB en
-  funciones serverless. La app lo detecta sola y avisa antes de subir. En local
-  el tope es de 25 MB. Si los PDF reales pesan más, la salida es subirlos a
-  Supabase Storage y procesarlos desde ahí (el punto de enganche está aislado en
-  `procesarPdf`).
-- **Tiempo de proceso:** el límite del plan gratuito es de 60 s por petición.
-  El PDF de prueba de 10 páginas tarda ~200 ms, así que hay margen amplio.
+- **PDF chico (hasta `MAX_PDF_MB`, ~4,5 MB en Vercel / 25 MB en local):** se
+  sube y procesa en la misma petición, con progreso en vivo. No hace falta
+  nada más.
+- **PDF grande (arriba de eso, hasta cientos de MB):** con Supabase configurado,
+  el botón de subir cambia solo a la carga por partes (ver sección 11, "PDFs
+  grandes"). **Este camino necesita el worker corriendo aparte** (`npm run
+  worker`): sin él, el archivo queda subido pero nadie lo procesa. El worker
+  NO corre en Vercel — es un proceso Node de larga duración, y las funciones
+  de Vercel tienen tope de tiempo (60s en el plan gratuito) y de tamaño de
+  archivo (~4,5 MB) que un PDF de 250 MB no respeta bajo ningún ajuste.
+- **Tiempo de proceso del camino chico:** el límite del plan gratuito de
+  Vercel es 60 s por petición. El PDF de prueba de 10 páginas tarda ~200 ms,
+  así que hay margen amplio para PDFs chicos con muchas más boletas.
 
 ### Cómo retirar la demo más adelante
 
@@ -359,6 +388,101 @@ preferible que nadie entre a que quede abierto con la clave de desarrollo.
 - **Configuración → Borrar datos de demostración** → los elimina sin tocar las
   fechas reales.
 - Cambiar `ADMIN_PASSWORD` → cierra todas las sesiones abiertas.
+
+---
+
+## 11. PDFs grandes: arquitectura y cómo correr el worker
+
+Objetivo: procesar un PDF de 250 MB o más **sin que pase por una función de
+Vercel** (tienen tope de ~4,5 MB de cuerpo y 60 s de ejecución en el plan
+gratuito, y no hay forma de subir eso "legítimamente" sin engañar al límite).
+
+```
+Navegador                    Vercel (sólo coordina)         Supabase
+──────────                   ──────────────────────         ────────
+1. Parte el PDF en                                          
+   pedazos (pdf-lib,         2. Crea el registro del   ---> prode_trabajos
+   en el propio                 trabajo y firma una          (fila con el
+   navegador)                   URL de subida por chunk      progreso)
+      |                              |
+      +---- sube cada chunk directo a Storage (URL firmada) --->  Storage
+      |                                                           (bucket
+      +---- avisa "chunk N listo" (sólo metadata) ---> Vercel     prode-pdfs)
+      |
+3. Avisa "encolar"  ---> Vercel marca el trabajo "pendiente"
+
+                                                    4. El WORKER (aparte,
+                                                       fuera de Vercel) va
+                                                       descargando los
+                                                       chunks de a uno,
+                                                       extrayendo el texto
+                                                       y guardando el
+                                                       progreso después de
+                                                       CADA chunk.
+
+5. El navegador consulta el progreso (polling) ---> Vercel lee prode_trabajos
+
+6. Cuando terminan todos los chunks, el worker corre el analizador UNA sola
+   vez sobre el documento completo y guarda las boletas -> prode_boletas.
+```
+
+### Por qué el límite de 50 MB no se puede evitar
+
+El plan **gratuito** de Supabase Storage rechaza cualquier archivo de más de
+**50 MB** — es un tope de la plataforma, no algo que se pueda subir con una
+opción de configuración. Por eso el PDF se parte en pedazos de hasta 45 MB
+cada uno (`MAX_CHUNK_MB`) antes de subirlo: un PDF de 250 MB son ~6 chunks.
+Esto es gratis siempre que el PDF completo no supere el 1 GB de Storage que
+incluye el plan gratuito de Supabase (o el 500 MB de tamaño de base de datos,
+si guardás muchos PDFs a la vez sin borrarlos).
+
+### El worker: qué es y por qué no corre en Vercel
+
+Es un script de Node (`worker/index.ts`) que corre aparte, no dentro de la
+app de Next.js. Reutiliza el mismo motor de lectura de PDF y el mismo motor de
+corrección que la carga chica — no hay dos lectores de boletas, uno solo,
+compartido (`analizarYConstruir` en `src/lib/pdf/procesar.ts`).
+
+```bash
+npm run worker         # corre para siempre, revisando cada 5s si hay trabajos
+npm run worker:once    # procesa un solo trabajo pendiente y termina (útil para probar)
+```
+
+Necesita las mismas `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` del `.env`
+del proyecto (las lee de `.env.local` o `.env` en la raíz).
+
+**Dónde correrlo:**
+- **Para la demo / uso personal:** en tu computadora, en una terminal aparte
+  mientras usás el panel. Si lo cerrás, los trabajos quedan "pendientes" y
+  siguen ahí: al volver a abrirlo, retoma solo.
+- **Para que ande sin que dependa de tu computadora:** cualquier host que
+  corra un proceso Node de larga duración (un VPS, Railway, Render, Fly.io,
+  un servidor propio). Esto **no es gratis garantizado**: estos servicios
+  suelen tener un plan gratuito limitado (se duerme sin uso, hay tope de
+  horas, etc.) — es la parte de la demo que, para producción real 24/7,
+  probablemente necesite un plan pago de *hosting del worker* (no de
+  Supabase). Te aviso esto en vez de ocultarlo: es la única pieza de todo el
+  sistema que no puedo garantizar 100% gratis en un despliegue "siempre
+  encendido".
+
+### Qué pasa si el worker se corta a la mitad
+
+Cada chunk se marca `extraido` en `prode_trabajos.chunks` recién cuando su
+texto ya se guardó. Si el proceso se cae (o lo cerrás) después del chunk 4 de
+10, al volver a arrancar (`npm run worker`) busca ese mismo trabajo, ve que
+los chunks 1-4 ya están `extraido` y sigue directo por el 5. Nunca vuelve a
+descargar ni a leer un chunk ya procesado.
+
+### Límites honestos de este camino
+
+- **Resumibilidad de la SUBIDA** (no del procesamiento): es por chunk, no
+  byte a byte. Si se corta la subida de un chunk de 45 MB a la mitad, ese
+  chunk se reintenta entero (hasta 3 veces); no hace falta resubir el PDF
+  completo, sólo ese pedazo.
+- **Un worker procesa un trabajo por vez.** Para esta demo alcanza. Si en el
+  futuro hace falta paralelismo (varios PDFs grandes a la vez), habría que
+  correr más de un proceso worker o agregarle *locking* — no está hecho
+  todavía, y agregarlo sin necesidad real sería complejidad de más.
 
 ---
 
@@ -394,12 +518,14 @@ En `public/demo/` hay dos PDF de prueba, descargables desde **Configuración**:
 | Archivo | Contenido |
 |---|---|
 | `boletas-fecha-12.pdf` | 14 boletas correctas, 2 por página |
-| `boletas-fecha-12-con-errores.pdf` | Las 14 anteriores + 5 casos problemáticos |
+| `boletas-fecha-12-con-errores.pdf` | Las 14 anteriores + 5 casos especiales |
 
-El segundo trae una boleta incompleta (9 pronósticos), una con doble marca en el
-mismo partido, una sin nombre, un participante repetido y una boleta duplicada
-idéntica. Sirve para mostrarle al cliente, en vivo, qué hace el sistema cuando
-algo no cierra.
+El segundo trae una boleta incompleta (9 pronósticos), una con un **doble**
+válido en el partido 4 (dos marcas: cuenta como acierto si el resultado
+oficial es cualquiera de las dos), una sin nombre, un participante repetido y
+una boleta duplicada idéntica. Sirve para mostrarle al cliente, en vivo, qué
+hace el sistema con cada caso: el doble se procesa solo (aviso, no bloquea);
+los otros cuatro sí quedan en revisión.
 
 Para probar de punta a punta: **Nueva fecha** → 10 partidos → cargá los equipos
 (River-Racing, Boca-Independiente, Talleres-Belgrano, San Lorenzo-Huracán,
@@ -415,10 +541,14 @@ Lanús-Banfield, Defensa y Justicia-Tigre, Godoy Cruz-Instituto), resultados
 npm test
 ```
 
-43 pruebas que cubren, entre otras cosas, los casos difíciles: todos aciertan,
-todos fallan, empate múltiple, boleta incompleta, pronóstico ilegible, boleta
-duplicada, participante duplicado, número duplicado, resultados faltantes,
-desempate configurado, corrección manual, validaciones de entrada, exportación
-CSV/Excel, y el procesamiento real del PDF de `public/demo` verificando que cada
-uno de los pronósticos leídos coincide exactamente con el que se usó para
-generar ese PDF.
+46 pruebas que cubren, entre otras cosas, los casos difíciles: todos aciertan,
+todos fallan, empate múltiple, boleta incompleta, pronóstico ilegible, dobles
+(acierta con cualquiera de las dos opciones), boleta duplicada, participante
+duplicado, número duplicado, resultados faltantes, desempate configurado,
+corrección manual, validaciones de entrada, exportación CSV/Excel, y el
+procesamiento real del PDF de `public/demo` verificando que cada uno de los
+pronósticos leídos coincide exactamente con el que se usó para generar ese PDF.
+
+No incluyen una prueba automática del worker de PDFs grandes (necesita
+Supabase real): para probarlo a mano, usá `npm run worker:once` después de
+subir un PDF grande desde el panel.

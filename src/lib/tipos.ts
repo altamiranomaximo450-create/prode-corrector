@@ -32,6 +32,7 @@ export type CodigoProblema =
   | "NUMERO_NO_DETECTADO"
   | "CANTIDAD_PRONOSTICOS"
   | "PRONOSTICO_AMBIGUO"
+  | "PRONOSTICO_DOBLE"
   | "PRONOSTICO_FALTANTE"
   | "PARTIDO_DESCONOCIDO"
   | "BOLETA_INCOMPLETA"
@@ -54,8 +55,16 @@ export interface ProblemaBoleta {
 
 export interface PronosticoBoleta {
   partidoNumero: number;
-  /** `null` = no se pudo leer. Nunca se completa por inferencia. */
+  /** `null` = no se pudo leer, o hay más de una opción marcada (ver `opciones`). */
   valor: Pronostico | null;
+  /**
+   * Todas las opciones marcadas para este partido. Normalmente una sola
+   * (`opciones.length === 1`, igual a `valor`). Si son dos, es un "doble"
+   * (ej.: "1/X"): una jugada válida y normal en el Prode, no un error de
+   * lectura. El acierto se calcula si el resultado oficial está entre las
+   * opciones. Vacío = no se pudo leer nada.
+   */
+  opciones: Pronostico[];
   origen: "pdf" | "manual";
   /** 0..1 */
   confianza: number;
@@ -146,7 +155,10 @@ export interface DetallePartido {
   partidoNumero: number;
   local: string;
   visitante: string;
+  /** Opción única leída, o `null` si no hay una sola (ver `opciones`). */
   pronostico: Pronostico | null;
+  /** Todas las opciones marcadas (1 normalmente, 2 si es un "doble"). */
+  opciones: Pronostico[];
   resultado: Pronostico | null;
   estado: EstadoDetalle;
   evidencia: string;
@@ -181,7 +193,7 @@ export interface FilaRanking extends FilaCorreccion {
 }
 
 export interface GrupoPuesto {
-  puesto: 1 | 2 | 3;
+  puesto: 1 | 2 | 3 | 4 | 5;
   aciertos: number;
   participantes: FilaRanking[];
   empate: boolean;
@@ -205,7 +217,7 @@ export interface ResultadoCorreccion {
   filas: FilaCorreccion[];
   ranking: FilaRanking[];
   enRevision: FilaCorreccion[];
-  top3: GrupoPuesto[];
+  top5: GrupoPuesto[];
   resumen: ResumenFecha;
   /** Advertencias globales (p. ej. faltan resultados oficiales). */
   advertencias: string[];

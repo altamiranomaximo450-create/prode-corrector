@@ -75,6 +75,40 @@ describe("motor de corrección", () => {
   });
 });
 
+describe("dobles (dos opciones marcadas en el mismo partido)", () => {
+  it("acierta si el resultado oficial es cualquiera de las dos opciones del doble", () => {
+    const fecha = crearFecha(RESULTADOS); // partido 1 sale "1"
+    const pron: (Pronostico | Pronostico[])[] = [...RESULTADOS];
+    pron[0] = ["1", "X"]; // doble en el partido 1: acierta porque incluye "1"
+    const fila = corregirBoleta(fecha, crearBoleta("b7", "Doble Acierta", pron));
+
+    expect(fila.detalle[0].estado).toBe("acierto");
+    expect(fila.detalle[0].opciones).toEqual(["1", "X"]);
+    expect(fila.aciertos).toBe(10);
+  });
+
+  it("falla el doble si el resultado oficial no está entre las dos opciones", () => {
+    const fecha = crearFecha(RESULTADOS); // partido 1 sale "1"
+    const pron: (Pronostico | Pronostico[])[] = [...RESULTADOS];
+    pron[0] = ["X", "2"]; // ninguna es "1"
+    const fila = corregirBoleta(fecha, crearBoleta("b8", "Doble Falla", pron));
+
+    expect(fila.detalle[0].estado).toBe("error");
+    expect(fila.aciertos).toBe(9);
+    expect(fila.errores).toBe(1);
+  });
+
+  it("no trata un doble como boleta ilegible: no es sin_pronostico", () => {
+    const fecha = crearFecha(RESULTADOS);
+    const pron: (Pronostico | Pronostico[])[] = [...RESULTADOS];
+    pron[2] = ["1", "2"];
+    const fila = corregirBoleta(fecha, crearBoleta("b9", "Doble", pron));
+
+    expect(fila.detalle[2].estado).not.toBe("sin_pronostico");
+    expect(fila.sinPronostico).toBe(0);
+  });
+});
+
 describe("ranking", () => {
   it("ordena de mayor a menor y usa posiciones competitivas ante empates", () => {
     const fecha = crearFecha(RESULTADOS);
@@ -106,10 +140,10 @@ describe("ranking", () => {
       crearBoleta("b3", "Tres", [...RESULTADOS]),
     ]);
 
-    expect(correccion.top3).toHaveLength(1);
-    expect(correccion.top3[0].puesto).toBe(1);
-    expect(correccion.top3[0].empate).toBe(true);
-    expect(correccion.top3[0].participantes).toHaveLength(3);
+    expect(correccion.top5).toHaveLength(1);
+    expect(correccion.top5[0].puesto).toBe(1);
+    expect(correccion.top5[0].empate).toBe(true);
+    expect(correccion.top5[0].participantes).toHaveLength(3);
   });
 
   it("aplica la regla de desempate por partido clave cuando el administrador la define", () => {
@@ -184,7 +218,7 @@ describe("ranking", () => {
   it("no rompe cuando no hay ninguna boleta", () => {
     const correccion = corregirFecha(crearFecha(RESULTADOS), []);
     expect(correccion.ranking).toHaveLength(0);
-    expect(correccion.top3).toHaveLength(0);
+    expect(correccion.top5).toHaveLength(0);
     expect(correccion.resumen.promedioAciertos).toBeNull();
     expect(correccion.advertencias.join(" ")).toContain("Todavía no hay boletas");
   });

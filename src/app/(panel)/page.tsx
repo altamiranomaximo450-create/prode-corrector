@@ -47,7 +47,7 @@ export default function PaginaDashboard() {
 
   if (cargandoFecha || !correccion) return <Cargando texto="Cargando la fecha…" />;
 
-  const { fecha, resumen, top3, advertencias } = correccion;
+  const { fecha, resumen, top5, advertencias } = correccion;
   const procesadas = resumen.boletasOk + resumen.boletasResueltasManualmente;
 
   return (
@@ -167,19 +167,19 @@ export default function PaginaDashboard() {
       <section className="mt-6">
         <div className="tarjeta">
           <div className="tarjeta-cabecera">
-            <h2 className="titulo-seccion">🏆 Top 3</h2>
+            <h2 className="titulo-seccion">🏆 Top 5</h2>
             <Link href="/ganadores" className="boton-sutil boton-chico">
               Ver ganadores
             </Link>
           </div>
-          {top3.length === 0 ? (
+          {top5.length === 0 ? (
             <Vacio
               titulo="Todavía no hay podio"
               descripcion="Hacen falta boletas válidas y al menos un resultado oficial cargado."
             />
           ) : (
             <ul className="divide-y divide-tinta-100">
-              {top3.map((grupo) => (
+              {top5.map((grupo) => (
                 <li key={grupo.puesto} className="flex flex-wrap items-center gap-4 px-5 py-4">
                   <span className="text-2xl">{MEDALLAS[grupo.puesto]}</span>
                   <div className="min-w-0 flex-1">

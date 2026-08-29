@@ -251,6 +251,22 @@ body {
   transition: width 0.3s;
 }
 
+/* Sin porcentaje que mostrar todavía (arrancando el worker, analizando): se
+   marca como indeterminado en vez de fingir un 0% que no significa nada. */
+.barra-relleno.indefinido {
+  width: 35%;
+  animation: vaiven 1.2s ease-in-out infinite;
+}
+
+@keyframes vaiven {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(285%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .barra-relleno.indefinido { animation: none; width: 100%; opacity: 0.35; }
+}
+
 .porcentaje {
   font-family: var(--mono);
   font-size: 30px;

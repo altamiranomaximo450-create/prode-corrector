@@ -6,10 +6,18 @@
  * URL firmada: los bytes del PDF no pasan nunca por una función de Vercel, que
  * es lo que permite archivos de 250 MB o más. Un worker aparte los procesa de a
  * una parte por vez, guardando progreso después de cada una para poder retomar.
+ *
+ * El worker no se arranca a mano: lo dispara la app al encolar (ver
+ * src/lib/disparador.ts). Para que ese arranque sea confiable, cada trabajo
+ * lleva además un LATIDO: mientras un worker lo está procesando escribe la hora
+ * cada pocos segundos. Un trabajo en marcha cuyo latido se enfrió es un trabajo
+ * abandonado (el runner se cayó, se cortó la red) y puede volver a tomarse
+ * desde su último checkpoint, sin empezar de cero.
  */
 
 import { randomUUID } from "node:crypto";
 import { BUCKET_PDFS, supabase } from "./almacen";
+import type { ResultadoDisparo } from "./disparador";
 import type { PaginaExtraida } from "./pdf/extraer";
 
 export type EstadoChunk = "subido" | "extraido" | "error";
@@ -29,8 +37,25 @@ export type EstadoTrabajo =
   | "pendiente"
   | "extrayendo"
   | "analizando"
+  | "guardando"
   | "completado"
   | "error";
+
+/** Estados en los que hay trabajo por hacer: son los que toma un worker. */
+export const ESTADOS_ACTIVOS: EstadoTrabajo[] = [
+  "pendiente",
+  "extrayendo",
+  "analizando",
+  "guardando",
+];
+
+/**
+ * Si el latido tiene más de esto, damos por muerto al worker que lo tomó y el
+ * trabajo vuelve a estar disponible. Es holgado a propósito: extraer una parte
+ * grande puede tardar, y el worker late mientras trabaja.
+ */
+export const LATIDO_FRIO_MS =
+  Number(process.env.PRODE_LATIDO_FRIO_MS) > 0 ? Number(process.env.PRODE_LATIDO_FRIO_MS) : 90_000;
 
 export interface Trabajo {
   id: string;
@@ -41,9 +66,17 @@ export interface Trabajo {
   estado: EstadoTrabajo;
   chunks: ChunkTrabajo[];
   paginasExtraidas: number;
+  paginasRescatadas: number;
   boletasDetectadas: number;
+  boletasGuardadas: number;
   mensaje: string | null;
   error: string | null;
+  latidoEn: string | null;
+  worker: string | null;
+  disparadoEn: string | null;
+  disparos: number;
+  disparoModo: string | null;
+  disparoDetalle: string | null;
   creadoEn: string;
   actualizadoEn: string;
 }
@@ -57,15 +90,25 @@ interface FilaTrabajo {
   estado: EstadoTrabajo;
   chunks: ChunkTrabajo[];
   paginas_extraidas: number;
+  paginas_rescatadas: number;
   boletas_detectadas: number;
+  boletas_guardadas: number;
   mensaje: string | null;
   error: string | null;
+  latido_en: string | null;
+  worker: string | null;
+  disparado_en: string | null;
+  disparos: number;
+  disparo_modo: string | null;
+  disparo_detalle: string | null;
   creado_en: string;
   actualizado_en: string;
 }
 
-const SELECT =
-  "id,fecha_id,nombre_archivo,bytes_totales,paginas_totales,estado,chunks,paginas_extraidas,boletas_detectadas,mensaje,error,creado_en,actualizado_en";
+// Una sola línea a propósito: partida con `+`, TypeScript la ensancha a `string`
+// y el cliente de Supabase deja de poder deducir el tipo de las filas.
+// prettier-ignore
+const SELECT = "id,fecha_id,nombre_archivo,bytes_totales,paginas_totales,estado,chunks,paginas_extraidas,paginas_rescatadas,boletas_detectadas,boletas_guardadas,mensaje,error,latido_en,worker,disparado_en,disparos,disparo_modo,disparo_detalle,creado_en,actualizado_en";
 
 function aTrabajo(f: FilaTrabajo): Trabajo {
   return {
@@ -76,13 +119,28 @@ function aTrabajo(f: FilaTrabajo): Trabajo {
     paginasTotales: f.paginas_totales,
     estado: f.estado,
     chunks: f.chunks ?? [],
-    paginasExtraidas: f.paginas_extraidas,
-    boletasDetectadas: f.boletas_detectadas,
+    paginasExtraidas: f.paginas_extraidas ?? 0,
+    paginasRescatadas: f.paginas_rescatadas ?? 0,
+    boletasDetectadas: f.boletas_detectadas ?? 0,
+    boletasGuardadas: f.boletas_guardadas ?? 0,
     mensaje: f.mensaje,
     error: f.error,
+    latidoEn: f.latido_en ?? null,
+    worker: f.worker ?? null,
+    disparadoEn: f.disparado_en ?? null,
+    disparos: f.disparos ?? 0,
+    disparoModo: f.disparo_modo ?? null,
+    disparoDetalle: f.disparo_detalle ?? null,
     creadoEn: f.creado_en,
     actualizadoEn: f.actualizado_en,
   };
+}
+
+/** true si el trabajo está en marcha pero nadie lo está tocando hace rato. */
+export function latidoFrio(trabajo: Trabajo, ahora = Date.now()): boolean {
+  if (!trabajo.latidoEn) return true;
+  const t = Date.parse(trabajo.latidoEn);
+  return !Number.isFinite(t) || ahora - t > LATIDO_FRIO_MS;
 }
 
 export async function crearTrabajo(datos: {
@@ -118,17 +176,77 @@ export async function obtenerTrabajo(id: string): Promise<Trabajo | null> {
   return data ? aTrabajo(data as FilaTrabajo) : null;
 }
 
-/** El siguiente trabajo que el worker debe procesar (el más viejo primero). */
-export async function siguienteTrabajoPendiente(): Promise<Trabajo | null> {
+/**
+ * Trabajos que un worker puede tomar ahora mismo: los pendientes y los que
+ * quedaron a medias con el latido frío. Los que otro worker está procesando de
+ * verdad quedan afuera.
+ */
+export async function trabajosTomables(limite = 20): Promise<Trabajo[]> {
   const { data, error } = await supabase()
     .from("prode_trabajos")
     .select(SELECT)
-    .in("estado", ["pendiente", "extrayendo", "analizando"])
+    .in("estado", ESTADOS_ACTIVOS)
     .order("creado_en", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+    .limit(limite);
   if (error) throw new Error(`No se pudieron buscar trabajos pendientes: ${error.message}`);
-  return data ? aTrabajo(data as FilaTrabajo) : null;
+  const ahora = Date.now();
+  return (data ?? [])
+    .map((f) => aTrabajo(f as FilaTrabajo))
+    .filter((t) => t.estado === "pendiente" || latidoFrio(t, ahora));
+}
+
+/**
+ * Toma el trabajo para este worker. Es un compare-and-swap sobre el latido: la
+ * condición del UPDATE es que el latido siga siendo el que se leyó, así que si
+ * dos workers intentan a la vez, uno solo gana y el otro sigue de largo. Sin
+ * esto, dos runners de GitHub Actions disparados casi juntos podrían procesar
+ * el mismo PDF dos veces.
+ */
+export async function reclamarTrabajo(trabajo: Trabajo, workerId: string): Promise<boolean> {
+  const ahora = new Date().toISOString();
+  let consulta = supabase()
+    .from("prode_trabajos")
+    .update({
+      estado: "extrayendo",
+      worker: workerId,
+      latido_en: ahora,
+      actualizado_en: ahora,
+      mensaje: "Leyendo el PDF...",
+      error: null,
+    })
+    .eq("id", trabajo.id);
+
+  consulta = trabajo.latidoEn
+    ? consulta.eq("latido_en", trabajo.latidoEn)
+    : consulta.is("latido_en", null);
+
+  const { data, error } = await consulta.select("id");
+  if (error) throw new Error(`No se pudo tomar el trabajo: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
+/** Marca que este worker sigue vivo, y de paso guarda progreso. */
+export async function latir(
+  id: string,
+  cambios: Partial<
+    Pick<
+      FilaTrabajo,
+      | "estado"
+      | "chunks"
+      | "paginas_extraidas"
+      | "paginas_rescatadas"
+      | "boletas_detectadas"
+      | "boletas_guardadas"
+      | "mensaje"
+    >
+  > = {},
+): Promise<void> {
+  const ahora = new Date().toISOString();
+  const { error } = await supabase()
+    .from("prode_trabajos")
+    .update({ ...cambios, latido_en: ahora, actualizado_en: ahora })
+    .eq("id", id);
+  if (error) throw new Error(`No se pudo guardar el latido: ${error.message}`);
 }
 
 export async function actualizarTrabajo(
@@ -139,10 +257,14 @@ export async function actualizarTrabajo(
       | "estado"
       | "chunks"
       | "paginas_extraidas"
+      | "paginas_rescatadas"
       | "boletas_detectadas"
+      | "boletas_guardadas"
       | "mensaje"
       | "error"
       | "paginas_totales"
+      | "latido_en"
+      | "worker"
     >
   >,
 ): Promise<void> {
@@ -151,6 +273,38 @@ export async function actualizarTrabajo(
     .update({ ...cambios, actualizado_en: new Date().toISOString() })
     .eq("id", id);
   if (error) throw new Error(`No se pudo actualizar el trabajo: ${error.message}`);
+}
+
+/**
+ * Deja constancia de que se pidió arrancar un worker. Lo que quedó acá es lo
+ * que se muestra en pantalla mientras el runner levanta, así que un fallo de
+ * configuración se ve en la web en vez de quedar como un 0% eterno.
+ */
+export async function registrarDisparo(
+  id: string,
+  resultado: ResultadoDisparo,
+  disparosPrevios: number,
+): Promise<void> {
+  const ahora = new Date().toISOString();
+  const cambios: Record<string, unknown> = {
+    disparado_en: ahora,
+    disparos: disparosPrevios + 1,
+    disparo_modo: resultado.modo,
+    disparo_detalle: resultado.detalle,
+    actualizado_en: ahora,
+  };
+  if (resultado.ok) {
+    cambios.mensaje =
+      resultado.modo === "github"
+        ? "Arrancando el worker en GitHub Actions..."
+        : "Arrancando el worker...";
+  } else {
+    // No se marca el trabajo como "error": el problema es del arranque, no del
+    // PDF, y el vigía puede volver a intentarlo. Pero el motivo se ve.
+    cambios.mensaje = `No se pudo arrancar el worker. ${resultado.detalle}`;
+  }
+  const { error } = await supabase().from("prode_trabajos").update(cambios).eq("id", id);
+  if (error) throw new Error(`No se pudo registrar el disparo: ${error.message}`);
 }
 
 export async function agregarChunk(trabajoId: string, chunk: ChunkTrabajo): Promise<Trabajo> {
@@ -190,7 +344,7 @@ export async function guardarChunkExtraido(
   trabajoId: string,
   chunk: Pick<ChunkTrabajo, "indice" | "paginaDesde" | "paginaHasta">,
   paginas: PaginaExtraida[],
-  mensaje: string,
+  datos: { mensaje: string; paginasRescatadas: number },
 ): Promise<void> {
   const { error: errPaginas } = await supabase()
     .from("prode_trabajo_paginas")
@@ -209,7 +363,12 @@ export async function guardarChunkExtraido(
     .filter((c) => c.estado === "extraido")
     .reduce((s, c) => s + (c.paginaHasta - c.paginaDesde + 1), 0);
 
-  await actualizarTrabajo(trabajoId, { chunks, paginas_extraidas: paginasExtraidas, mensaje });
+  await latir(trabajoId, {
+    chunks,
+    paginas_extraidas: paginasExtraidas,
+    paginas_rescatadas: trabajo.paginasRescatadas + datos.paginasRescatadas,
+    mensaje: datos.mensaje,
+  });
 }
 
 /** Todas las páginas ya extraídas, para armar el documento completo al final. */

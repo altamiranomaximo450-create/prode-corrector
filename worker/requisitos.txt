@@ -1,0 +1,18 @@
+# Dependencias de Python del worker: solo hacen falta para leer boletas que son
+# una IMAGEN (fotos o capturas de pantalla). Si el PDF tiene texto, el worker
+# anda sin nada de esto.
+#
+#   pip install -r worker/requisitos.txt
+#
+# En GitHub Actions las instala el workflow (.github/workflows/worker.yml).
+# En Windows, opencv (que arrastra rapidocr) instala sin pedir permisos de
+# administrador; no hace falta Tesseract ni ningun programa del sistema.
+
+# Lectura del PDF y renderizado de paginas.
+pymupdf>=1.24
+numpy>=1.26
+
+# OCR para el nombre del participante. Es pip puro: no necesita instalar
+# Tesseract ni nada del sistema operativo. Se puede sacar de esta lista si no
+# importa leer los nombres: el resto del procesamiento funciona igual.
+rapidocr-onnxruntime>=1.2

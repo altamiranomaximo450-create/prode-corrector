@@ -1,0 +1,22 @@
+{
+  "_comentario": "Fecha de ejemplo: los 16 partidos del PDF muestras/mananero.pdf con sus resultados oficiales. Sirve para probar el sistema de punta a punta sin base de datos: npx tsx scripts/probar-pdf.mts muestras/mananero.pdf scripts/fecha-mananero.json",
+  "nombre": "MAÑANERO 29/08",
+  "partidos": [
+    { "nombre": "Bournemouth - Everton", "resultado": "1" },
+    { "nombre": "Coventry - Hull", "resultado": "X" },
+    { "nombre": "Levante - Real Betis", "resultado": "2" },
+    { "nombre": "Estrasburgo - Lens", "resultado": "1" },
+    { "nombre": "Borussia Dortmund - Hamburgo", "resultado": "X" },
+    { "nombre": "Tottenham - Newcastle", "resultado": "2" },
+    { "nombre": "Auxerre - Angers", "resultado": "1" },
+    { "nombre": "Brest - Toulouse", "resultado": "2" },
+    { "nombre": "Lorient - Troyes", "resultado": "X" },
+    { "nombre": "Lyon - Le Havre", "resultado": "1" },
+    { "nombre": "Juventus - Parma", "resultado": "2" },
+    { "nombre": "Fiorentina - Frosinone", "resultado": null },
+    { "nombre": "Monza - Udinese", "resultado": null },
+    { "nombre": "Sassuolo - Torino", "resultado": null },
+    { "nombre": "Real Sociedad - Espanyol", "resultado": null },
+    { "nombre": "Sevilla - Atlético de Madrid", "resultado": "X" }
+  ]
+}

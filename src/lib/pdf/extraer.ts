@@ -46,7 +46,7 @@ export interface DocumentoExtraido {
 }
 
 /** Umbral por debajo del cual consideramos que una página no tiene capa de texto útil. */
-const MIN_CARACTERES_PAGINA = 12;
+export const MIN_CARACTERES_PAGINA = 12;
 
 type ProgresoFn = (paginaActual: number, totalPaginas: number) => void;
 
@@ -70,7 +70,7 @@ async function cargarPdfjs(): Promise<any> {
   return mod;
 }
 
-function agruparEnLineas(tokens: Token[], pagina: number): Linea[] {
+export function agruparEnLineas(tokens: Token[], pagina: number): Linea[] {
   if (tokens.length === 0) return [];
 
   const alturas = tokens.map((t) => t.alto).filter((a) => a > 0).sort((a, b) => a - b);

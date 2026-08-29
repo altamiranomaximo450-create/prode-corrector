@@ -7,8 +7,13 @@
  *
  * El PDF se parte en el navegador con pdf-lib y cada parte se sube DIRECTO a
  * Supabase Storage con una URL firmada. El archivo no pasa nunca por una
- * función de Vercel: por eso admite PDFs de 250 MB o más. El procesamiento lo
- * hace el worker (`npm run worker`) y acá sólo se consulta el progreso.
+ * función de Vercel: por eso admite PDFs de 250 MB o más.
+ *
+ * El procesamiento arranca solo: al terminar de subir, el servidor levanta el
+ * worker (GitHub Actions en producción, un proceso hijo en desarrollo) y esta
+ * pantalla muestra el progreso REAL que el worker va escribiendo en la base.
+ * Todo lo que se ve acá —páginas leídas, boletas detectadas, boletas
+ * guardadas— son números que vienen del PDF, nunca una animación de relleno.
  */
 
 import { useRef, useState } from "react";
@@ -17,6 +22,9 @@ import { createClient } from "@supabase/supabase-js";
 import type { Fecha, FilaRanking, Pronostico, ResultadoCorreccion } from "@/lib/tipos";
 
 type Paso = "formulario" | "procesando" | "ranking";
+
+/** En qué punto del camino está la subida. Las tres primeras las controla el navegador. */
+type Fase = "creando" | "preparando" | "subiendo" | "encolando" | "worker";
 
 interface FilaPartido {
   nombre: string;
@@ -28,9 +36,14 @@ interface Trabajo {
   estado: string;
   paginasTotales: number;
   paginasExtraidas: number;
+  paginasRescatadas: number;
   boletasDetectadas: number;
+  boletasGuardadas: number;
   mensaje: string | null;
   error: string | null;
+  disparoModo: string | null;
+  disparoDetalle: string | null;
+  disparos: number;
 }
 
 const OPCIONES: { valor: Pronostico; texto: string }[] = [
@@ -61,7 +74,7 @@ async function pedir<T>(url: string, init?: RequestInit): Promise<T> {
 async function partirPdf(
   archivo: File,
   maxBytes: number,
-  aviso: (m: string) => void,
+  aviso: (hechas: number, total: number) => void,
 ): Promise<{ paginasTotales: number; partes: { indice: number; desde: number; hasta: number; blob: Blob }[] }> {
   const origen = await PDFDocument.load(new Uint8Array(await archivo.arrayBuffer()), {
     ignoreEncryption: true,
@@ -88,7 +101,7 @@ async function partirPdf(
           hasta: desde + lote,
           blob: new Blob([bytes as BlobPart], { type: "application/pdf" }),
         });
-        aviso(`Preparando el PDF: página ${desde + lote} de ${total}`);
+        aviso(desde + lote, total);
         indice += 1;
         desde += lote;
         break;
@@ -111,7 +124,8 @@ export function Corrector() {
   const [archivo, setArchivo] = useState<File | null>(null);
   const entradaArchivo = useRef<HTMLInputElement>(null);
 
-  const [aviso, setAviso] = useState("");
+  const [fase, setFase] = useState<Fase>("creando");
+  const [local, setLocal] = useState({ hechas: 0, total: 0, detalle: "" });
   const [trabajo, setTrabajo] = useState<Trabajo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [correccion, setCorreccion] = useState<ResultadoCorreccion | null>(null);
@@ -132,6 +146,7 @@ export function Corrector() {
   }
 
   async function seguirProgreso(fechaId: string, trabajoId: string) {
+    setFase("worker");
     for (;;) {
       const { trabajo: t } = await pedir<{ trabajo: Trabajo }>(
         `/api/fechas/${fechaId}/subida/${trabajoId}`,
@@ -160,7 +175,8 @@ export function Corrector() {
     setError(null);
     setTrabajo(null);
     setPaso("procesando");
-    setAviso("Creando la fecha...");
+    setFase("creando");
+    setLocal({ hechas: 0, total: 0, detalle: "" });
 
     try {
       const { fecha } = await pedir<{ fecha: Fecha }>("/api/fechas", {
@@ -180,11 +196,11 @@ export function Corrector() {
         supabaseAnonKey: string;
       }>(`/api/fechas/${fecha.id}/subida`);
 
-      setAviso("Preparando el PDF...");
+      setFase("preparando");
       const { paginasTotales, partes } = await partirPdf(
         archivo,
         Math.round(config.maxChunkMb * 1024 * 1024),
-        setAviso,
+        (hechas, total) => setLocal({ hechas, total, detalle: "" }),
       );
 
       const { trabajo: creado } = await pedir<{ trabajo: { id: string } }>(
@@ -201,9 +217,13 @@ export function Corrector() {
 
       const trabajoId = creado.id;
       const almacenamiento = createClient(config.supabaseUrl, config.supabaseAnonKey);
+      const bytesTotales = partes.reduce((s, p) => s + p.blob.size, 0);
+      let bytesSubidos = 0;
+
+      setFase("subiendo");
+      setLocal({ hechas: 0, total: bytesTotales, detalle: `0 de ${partes.length} partes` });
 
       for (const parte of partes) {
-        setAviso(`Subiendo parte ${parte.indice + 1} de ${partes.length} (páginas ${parte.desde}-${parte.hasta})`);
         for (let intento = 1; ; intento++) {
           try {
             const { bucket, path, token } = await pedir<{
@@ -235,9 +255,15 @@ export function Corrector() {
             await new Promise((r) => setTimeout(r, 1500 * intento));
           }
         }
+        bytesSubidos += parte.blob.size;
+        setLocal({
+          hechas: bytesSubidos,
+          total: bytesTotales,
+          detalle: `${parte.indice + 1} de ${partes.length} partes · páginas ${parte.desde}-${parte.hasta}`,
+        });
       }
 
-      setAviso("Procesando las boletas...");
+      setFase("encolando");
       await pedir(`/api/fechas/${fecha.id}/subida/${trabajoId}/encolar`, { method: "POST" });
       await seguirProgreso(fecha.id, trabajoId);
     } catch (e) {
@@ -260,29 +286,9 @@ export function Corrector() {
   /* ------------------------------------------------------------------ */
 
   if (paso === "procesando") {
-    const total = Math.max(1, trabajo?.paginasTotales ?? 1);
-    const hechas = trabajo?.paginasExtraidas ?? 0;
-    const porcentaje = Math.min(100, Math.round((hechas / total) * 100));
     return (
       <main className="pantalla">
-        <h1 className="titulo">Procesando</h1>
-        <div className="tarjeta">
-          <div className="barra" role="progressbar" aria-valuenow={porcentaje} aria-valuemin={0} aria-valuemax={100}>
-            <div className="barra-relleno" style={{ width: `${porcentaje}%` }} />
-          </div>
-          <p className="porcentaje">{porcentaje}%</p>
-          <ul className="progreso">
-            {trabajo && trabajo.paginasTotales > 0 && (
-              <li>
-                Procesando página {hechas} / {trabajo.paginasTotales}
-              </li>
-            )}
-            {trabajo && trabajo.boletasDetectadas > 0 && (
-              <li>Boletas procesadas: {trabajo.boletasDetectadas}</li>
-            )}
-            <li className="tenue">{trabajo?.mensaje ?? aviso}</li>
-          </ul>
-        </div>
+        <Procesando fase={fase} local={local} trabajo={trabajo} />
       </main>
     );
   }
@@ -291,7 +297,7 @@ export function Corrector() {
     const top = correccion.ranking.filter((r) => r.posicion <= 10);
     return (
       <main className="pantalla">
-        <h1 className="titulo">🏆 Ranking</h1>
+        <h1 className="titulo">🏆 TOP 10</h1>
         <p className="subtitulo">
           {correccion.fecha.nombre} · {correccion.resumen.boletas} boletas ·{" "}
           {correccion.resumen.partidosConResultado} de {correccion.fecha.cantidadPartidos} partidos
@@ -427,6 +433,110 @@ export function Corrector() {
     </main>
   );
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Pantalla de progreso                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Traduce el estado real a lo que se ve. No hay porcentajes inventados: cada
+ * número sale o del navegador (partes subidas) o de la fila del trabajo en la
+ * base, que escribe el worker mientras lee el PDF.
+ */
+function Procesando({
+  fase,
+  local,
+  trabajo,
+}: {
+  fase: Fase;
+  local: { hechas: number; total: number; detalle: string };
+  trabajo: Trabajo | null;
+}) {
+  let titulo = "Preparando";
+  let porcentaje: number | null = null;
+  const lineas: string[] = [];
+
+  if (fase === "creando") {
+    titulo = "Creando la fecha";
+  } else if (fase === "preparando") {
+    titulo = "Preparando el PDF";
+    if (local.total > 0) {
+      porcentaje = Math.round((local.hechas / local.total) * 100);
+      lineas.push(`Página ${local.hechas} / ${local.total}`);
+    }
+  } else if (fase === "subiendo") {
+    titulo = "Subiendo el PDF";
+    if (local.total > 0) porcentaje = Math.round((local.hechas / local.total) * 100);
+    if (local.detalle) lineas.push(local.detalle);
+    lineas.push(`${tamano(local.hechas)} de ${tamano(local.total)}`);
+  } else if (fase === "encolando" || !trabajo) {
+    titulo = "Arrancando el worker";
+  } else {
+    const total = Math.max(1, trabajo.paginasTotales);
+    switch (trabajo.estado) {
+      case "pendiente":
+        titulo = "Arrancando el worker";
+        break;
+      case "extrayendo":
+        titulo = "Leyendo el PDF";
+        porcentaje = Math.min(100, Math.round((trabajo.paginasExtraidas / total) * 100));
+        lineas.push(`Página ${trabajo.paginasExtraidas} / ${trabajo.paginasTotales}`);
+        break;
+      case "analizando":
+        titulo = "Detectando boletas";
+        porcentaje = 100;
+        lineas.push(`Páginas leídas: ${trabajo.paginasExtraidas} / ${trabajo.paginasTotales}`);
+        break;
+      case "guardando":
+        titulo = "Calculando aciertos";
+        lineas.push(`Boletas detectadas: ${trabajo.boletasDetectadas}`);
+        lineas.push(`Boletas procesadas: ${trabajo.boletasGuardadas}`);
+        porcentaje =
+          trabajo.boletasDetectadas > 0
+            ? Math.round((trabajo.boletasGuardadas / trabajo.boletasDetectadas) * 100)
+            : null;
+        break;
+      default:
+        titulo = "Procesando";
+    }
+    if (trabajo.paginasRescatadas > 0) {
+      lineas.push(`Páginas leídas con OCR: ${trabajo.paginasRescatadas}`);
+    }
+  }
+
+  const mensaje =
+    trabajo?.mensaje ??
+    (fase === "encolando" ? "Pidiendo el worker que va a leer el PDF..." : "");
+
+  return (
+    <>
+      <h1 className="titulo">{titulo}</h1>
+      <div className="tarjeta">
+        <div
+          className="barra"
+          role="progressbar"
+          aria-valuenow={porcentaje ?? undefined}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <div
+            className={porcentaje === null ? "barra-relleno indefinido" : "barra-relleno"}
+            style={porcentaje === null ? undefined : { width: `${porcentaje}%` }}
+          />
+        </div>
+        <p className="porcentaje">{porcentaje === null ? "···" : `${porcentaje}%`}</p>
+        <ul className="progreso">
+          {lineas.map((l, i) => (
+            <li key={i}>{l}</li>
+          ))}
+          {mensaje && <li className="tenue">{mensaje}</li>}
+        </ul>
+      </div>
+    </>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 
 function FilaTop({
   fila,

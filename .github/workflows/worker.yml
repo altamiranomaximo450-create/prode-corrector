@@ -1,0 +1,102 @@
+# ---------------------------------------------------------------------------
+#  Worker de procesamiento de PDFs
+#
+#  Este workflow ES el worker de producción. No hay que arrancar nada a mano:
+#  cuando el usuario aprieta PROCESAR BOLETAS, la app (en Vercel) manda un
+#  `repository_dispatch` a este repositorio y GitHub levanta el runner que lee
+#  el PDF desde Supabase Storage y guarda las boletas.
+#
+#  Por qué acá y no en Vercel: un PDF de 250 MB con miles de páginas necesita
+#  minutos de CPU y bastante memoria. Una función de Vercel se corta por tiempo.
+#  Un runner de GitHub Actions tiene 4 vCPU, 16 GB de RAM y hasta 6 horas.
+#
+#  Configuración necesaria (una sola vez), en Settings del repositorio:
+#    Secrets and variables -> Actions -> Secrets:
+#      SUPABASE_URL                Project URL de Supabase
+#      SUPABASE_SERVICE_ROLE_KEY   clave service_role de Supabase
+#    Secrets and variables -> Actions -> Variables (opcional):
+#      PRODE_PDF_BUCKET            por defecto "prode-pdfs"
+#
+#  Y en Vercel, para que la app pueda dispararlo:
+#      GITHUB_WORKER_REPO   usuario/repositorio
+#      GITHUB_WORKER_TOKEN  token con permiso de escritura de contenido
+# ---------------------------------------------------------------------------
+
+name: Worker de PDFs
+
+on:
+  # El disparo real: lo manda la app al encolar un PDF.
+  repository_dispatch:
+    types: [prode-procesar]
+  # Para correrlo a mano desde la pestaña Actions.
+  workflow_dispatch:
+  # Red de seguridad: si algún disparo se perdiera, dos veces por día se drena
+  # la cola igual. Es barato en minutos y evita que un trabajo quede colgado.
+  schedule:
+    - cron: "23 5,17 * * *"
+
+# Un solo worker por vez. Si llega otro disparo mientras este corre, queda en
+# espera y arranca después: el worker drena TODOS los trabajos pendientes, así
+# que ninguno se pierde. `cancel-in-progress: false` es deliberado: cancelar un
+# procesamiento a la mitad sería tirar trabajo ya hecho.
+concurrency:
+  group: prode-worker
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  procesar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Traer el código
+        uses: actions/checkout@v4
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: worker/requisitos.txt
+
+      - name: Dependencias de Node
+        run: npm ci
+
+      - name: Dependencias de lectura de imágenes
+        run: |
+          # opencv (que usa el OCR) necesita estas dos bibliotecas del sistema
+          # en un runner sin escritorio; sin ellas el import falla.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgl1 libglib2.0-0
+          python -m pip install --quiet --disable-pip-version-check -r worker/requisitos.txt
+          python -c "import pymupdf, numpy; print('PyMuPDF', pymupdf.__version__)"
+          python -c "from rapidocr_onnxruntime import RapidOCR; print('RapidOCR listo')"
+
+      - name: Procesar los PDFs pendientes
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PRODE_PDF_BUCKET: ${{ vars.PRODE_PDF_BUCKET || 'prode-pdfs' }}
+          # Node necesita margen para PDFs con muchas páginas por parte.
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: npm run worker:once
+
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo "### Worker de Prode"
+            echo ""
+            echo "- Disparado por: \`${{ github.event_name }}\`"
+            echo "- Trabajo pedido: \`${{ github.event.client_payload.trabajoId || 'todos los pendientes' }}\`"
+            echo "- Resultado: \`${{ job.status }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

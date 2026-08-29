@@ -59,7 +59,10 @@ export const BOLETAS = [
   { numero: "233", nombre: "Diego Fernandez",  jugadas: ["X", "X", "2", "1", "1", "1", "2", "2", "X", "1"] },
   { numero: "108", nombre: "Carla Gimenez",    jugadas: ["1", "2", "2", "X", "1", "X", "1", "1", "2", "1"] },
   { numero: "415", nombre: null,               jugadas: ["2", "X", "2", "1", "X", "X", "1", "2", "1", "1"] },
-  { numero: "076", nombre: "Nicolas Herrera",  jugadas: ["1", "1", "1", "2", "1", "2", "1", "2", "X", ""] },
+  // Dos partidos sin marcar: uno EN EL MEDIO y otro al final. El del medio es
+  // el caso que importa: si el lector se saltea ese renglón en vez de dejarlo
+  // vacío, todos los pronósticos siguientes se corren un partido.
+  { numero: "076", nombre: "Nicolas Herrera",  jugadas: ["1", "1", "", "2", "1", "2", "1", "2", "X", ""] },
   { numero: "290", nombre: "Valentina Rojas",  jugadas: ["1", "X", "2", "2", "2", "X", "2", "2", "X", "X"] },
   { numero: "144", nombre: "Ezequiel Molina",  jugadas: ["2", "2", "1", "X", "2", "1", "X", "1", "1", "2"] },
   { numero: "358", nombre: "Federico Quiroga", jugadas: ["1", "X", "X", "1", "1", "X", "2", "2", "X", "1"] },

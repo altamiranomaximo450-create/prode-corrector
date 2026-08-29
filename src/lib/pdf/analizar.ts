@@ -94,9 +94,15 @@ function segmentarPorAncla(doc: DocumentoExtraido, re: RegExp): Segmento[] {
   }
   if (cortes.length < 2) return [];
   const segmentos: Segmento[] = [];
-  for (let i = 0; i < cortes.length; i++) {
-    const desde = cortes[i];
-    const hasta = i + 1 < cortes.length ? cortes[i + 1] : todas.length;
+
+  // Lo que hay ANTES del primer corte también es una boleta. Sin esto, si la
+  // primera del PDF no tiene el ancla —por ejemplo una boleta sin nombre cuando
+  // el ancla es "Participante:"— desaparecía del ranking sin dejar rastro.
+  const inicios = cortes[0] > 0 ? [0, ...cortes] : cortes;
+
+  for (let i = 0; i < inicios.length; i++) {
+    const desde = inicios[i];
+    const hasta = i + 1 < inicios.length ? inicios[i + 1] : todas.length;
     const lineas = todas.slice(desde, hasta);
     if (lineas.length === 0) continue;
     segmentos.push({ lineas, paginas: [...new Set(lineas.map((l) => l.pagina))] });
@@ -249,7 +255,7 @@ function detectarEncabezadoGrilla(lineas: Linea[]): EncabezadoGrilla | null {
 }
 
 /** Grilla: columnas 1 / X / 2 con una marca bajo la elegida. */
-function modoGrilla(lineas: Linea[]): LecturaModo | null {
+function modoGrilla(lineas: Linea[], esperado: number): LecturaModo | null {
   const encabezado = detectarEncabezadoGrilla(lineas);
   if (!encabezado) return null;
   const { centros, indice } = encabezado;
@@ -258,30 +264,81 @@ function modoGrilla(lineas: Linea[]): LecturaModo | null {
   if (separacion <= 0) return null;
   const tolerancia = separacion * 0.45;
 
-  const valores: ValorLeido[] = [];
+  // Cada renglón que tenga algo DENTRO de las casillas es un partido, aunque no
+  // esté marcado. Antes se salteaban los renglones sin marca, y eso corría un
+  // lugar a todos los pronósticos siguientes: si alguien dejaba el partido 5 en
+  // blanco, su pronóstico del 6 se contaba como del 5 y así hasta el final.
+  const filas: { y: number; opciones: Pronostico[]; linea: Linea }[] = [];
   for (let i = indice + 1; i < lineas.length; i++) {
     const linea = lineas[i];
     const golpes: Pronostico[] = [];
+    let dentroDeLaGrilla = false;
     for (const t of linea.tokens) {
       const centroToken = t.x + t.ancho / 2;
       for (const c of centros) {
         if (Math.abs(centroToken - c.x) > tolerancia) continue;
+        dentroDeLaGrilla = true;
         const txt = t.texto.trim();
         if (MARCAS.test(txt)) golpes.push(c.valor);
         else if (etiquetaColumna(txt) === c.valor && txt.length <= 2) golpes.push(c.valor);
       }
     }
-    if (golpes.length === 0) continue;
+    if (!dentroDeLaGrilla) continue;
     const distintos = [...new Set(golpes)];
-    valores.push({
+    filas.push({
+      y: linea.y,
       // Dos marcas es un doble válido. Tres es ilegible: queda vacío.
       opciones: distintos.length <= 2 ? distintos : [],
-      evidencia: linea.texto,
-      pagina: linea.pagina,
+      linea,
     });
   }
 
-  return valores.length ? { modo: "grilla", valores, confianza: 0.95 } : null;
+  if (filas.length === 0) return null;
+
+  const valores = completarFilasSaltadas(filas, esperado);
+  return { modo: "grilla", valores, confianza: 0.95 };
+}
+
+/**
+ * Rellena los partidos que no dejaron ni un rastro en su renglón.
+ *
+ * En una boleta impresa, un partido sin marcar puede no tener NADA a la altura
+ * de las casillas: ni una cruz ni un guioncito. Ese renglón no se ve, y sin
+ * rellenarlo los partidos de abajo se correrían un lugar.
+ *
+ * Los renglones de una grilla están a distancias iguales, así que un hueco se
+ * reconoce por ser un salto de dos o más veces la separación normal. Solo se
+ * rellenan huecos INTERNOS: nunca se inventan partidos por fuera de lo leído.
+ */
+function completarFilasSaltadas(
+  filas: { y: number; opciones: Pronostico[]; linea: Linea }[],
+  esperado: number,
+): ValorLeido[] {
+  const valor = (f: { opciones: Pronostico[]; linea: Linea }): ValorLeido => ({
+    opciones: f.opciones,
+    evidencia: f.linea.texto,
+    pagina: f.linea.pagina,
+  });
+  const vacio: ValorLeido = { opciones: [], evidencia: "(partido sin marcar)", pagina: null };
+
+  if (filas.length < 3) return filas.map(valor);
+
+  // Las líneas vienen de arriba hacia abajo: en el PDF la Y decrece.
+  const saltos = filas.slice(1).map((f, i) => filas[i].y - f.y);
+  const positivos = saltos.filter((s) => s > 0).sort((a, b) => a - b);
+  if (positivos.length === 0) return filas.map(valor);
+  const normal = positivos[Math.floor(positivos.length / 2)];
+  if (normal <= 0) return filas.map(valor);
+
+  const salida: ValorLeido[] = [valor(filas[0])];
+  for (let i = 1; i < filas.length; i++) {
+    const huecos = Math.round(saltos[i - 1] / normal) - 1;
+    if (huecos > 0 && huecos <= esperado) {
+      for (let k = 0; k < huecos; k++) salida.push(vacio);
+    }
+    salida.push(valor(filas[i]));
+  }
+  return salida;
 }
 
 /** Cada renglón de partido termina con su pronóstico: "River vs Racing   1/X". */
@@ -358,7 +415,7 @@ function modoSecuencia(lineas: Linea[], esperado: number): LecturaModo | null {
 }
 
 function leerPronosticos(lineas: Linea[], esperado: number): LecturaModo | null {
-  const grilla = modoGrilla(lineas);
+  const grilla = modoGrilla(lineas, esperado);
   // La lectura por posición manda: es la única que distingue una marca de un
   // pronóstico escrito. Si la cantidad calza, no se discute.
   if (grilla && grilla.valores.length === esperado) return grilla;

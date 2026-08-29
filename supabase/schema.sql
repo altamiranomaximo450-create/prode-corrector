@@ -9,6 +9,9 @@
 --         anon public          -> NEXT_PUBLIC_SUPABASE_ANON_KEY
 --         service_role secret  -> SUPABASE_SERVICE_ROLE_KEY
 --
+--  Este archivo es IDEMPOTENTE: se puede volver a ejecutar sobre una base que
+--  ya existe para agregar las columnas nuevas sin perder datos.
+--
 --  Supabase es el ÚNICO almacén de la aplicación. No hay modo "archivos" ni
 --  "memoria": tener varios motores fue exactamente lo que rompía el
 --  procesamiento, porque la fecha se guardaba en uno y el worker la buscaba en
@@ -48,6 +51,10 @@ create index if not exists prode_fechas_creada_idx on public.prode_fechas (cread
 --  el navegador sube DIRECTO a Supabase Storage —nunca pasan por una función de
 --  Vercel— y que el worker (worker/index.ts, fuera de Vercel) procesa de a uno,
 --  guardando progreso acá para poder retomar si se interrumpe.
+--
+--  El worker NO se arranca a mano: la app lo dispara sola al encolar el trabajo
+--  (GitHub Actions en producción, un proceso hijo en desarrollo). Ver
+--  src/lib/disparador.ts y .github/workflows/worker.yml.
 -- ---------------------------------------------------------------------------
 
 create table if not exists public.prode_trabajos (
@@ -56,7 +63,7 @@ create table if not exists public.prode_trabajos (
   nombre_archivo     text not null,
   bytes_totales      bigint not null default 0,
   paginas_totales    integer not null default 0,
-  -- subiendo -> pendiente -> extrayendo -> analizando -> completado / error
+  -- subiendo -> pendiente -> extrayendo -> analizando -> guardando -> completado / error
   estado             text not null default 'subiendo',
   -- Array de { indice, paginaDesde, paginaHasta, storagePath, bytes, estado, error? }
   chunks             jsonb not null default '[]'::jsonb,
@@ -67,6 +74,27 @@ create table if not exists public.prode_trabajos (
   creado_en          timestamptz not null default now(),
   actualizado_en     timestamptz not null default now()
 );
+
+-- Columnas del arranque automático y del progreso real. Se agregan aparte para
+-- que este archivo se pueda volver a correr sobre una base ya creada.
+alter table public.prode_trabajos
+  -- Cuántas boletas se llevan GUARDADAS de las detectadas (progreso del cierre).
+  add column if not exists boletas_guardadas integer not null default 0,
+  -- Páginas que hubo que leer con PyMuPDF/OCR porque no tenían capa de texto.
+  add column if not exists paginas_rescatadas integer not null default 0,
+  -- Latido del worker que está procesando: si se enfría, el trabajo se
+  -- considera abandonado y otro worker (o el vigía) lo vuelve a tomar.
+  add column if not exists latido_en timestamptz,
+  -- Identificador del worker que lo tomó (para diagnosticar en los logs).
+  add column if not exists worker text,
+  -- Última vez que la app pidió arrancar un worker para este trabajo, y cuántas
+  -- veces. Evita disparar en loop si GitHub Actions no contesta.
+  add column if not exists disparado_en timestamptz,
+  add column if not exists disparos integer not null default 0,
+  -- Cómo se disparó ("github" / "local") y qué contestó. Es lo que se muestra
+  -- en pantalla mientras el worker arranca, para no mentir con un 0% mudo.
+  add column if not exists disparo_modo text,
+  add column if not exists disparo_detalle text;
 
 create index if not exists prode_trabajos_fecha_idx on public.prode_trabajos (fecha_id);
 create index if not exists prode_trabajos_estado_idx on public.prode_trabajos (estado, creado_en);

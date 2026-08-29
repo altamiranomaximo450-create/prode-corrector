@@ -102,7 +102,18 @@ export async function listarBoletas(fechaId: string): Promise<Boleta[]> {
   return boletas;
 }
 
-export async function reemplazarBoletas(fechaId: string, boletas: Boleta[]): Promise<void> {
+/**
+ * Reemplaza todas las boletas de una fecha.
+ *
+ * `alGuardar` recibe cuántas van guardadas después de cada tanda: es lo que le
+ * permite a la pantalla mostrar "Guardando boletas: 500 de 1834" con números
+ * reales en vez de quedarse congelada al final del procesamiento.
+ */
+export async function reemplazarBoletas(
+  fechaId: string,
+  boletas: Boleta[],
+  alGuardar?: (guardadas: number) => void,
+): Promise<void> {
   const { error: errBorrado } = await supabase()
     .from(TABLA_BOLETAS)
     .delete()
@@ -119,5 +130,6 @@ export async function reemplazarBoletas(fechaId: string, boletas: Boleta[]): Pro
     }));
     const { error } = await supabase().from(TABLA_BOLETAS).insert(filas);
     if (error) throw new Error(`No se pudieron guardar las boletas: ${error.message}`);
+    alGuardar?.(Math.min(i + tanda, boletas.length));
   }
 }

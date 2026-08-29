@@ -1,0 +1,155 @@
+@import "tailwindcss";
+
+@theme {
+  --color-tinta-50: #f6f7f9;
+  --color-tinta-100: #eceef2;
+  --color-tinta-200: #d5d9e2;
+  --color-tinta-300: #b0b8c8;
+  --color-tinta-400: #8590a8;
+  --color-tinta-500: #66728c;
+  --color-tinta-600: #515b73;
+  --color-tinta-700: #424a5d;
+  --color-tinta-800: #393f4e;
+  --color-tinta-900: #1e2330;
+  --color-tinta-950: #12151f;
+
+  --color-acento-50: #eef4ff;
+  --color-acento-100: #d9e6ff;
+  --color-acento-200: #bcd3ff;
+  --color-acento-300: #8eb6ff;
+  --color-acento-400: #598eff;
+  --color-acento-500: #3366f5;
+  --color-acento-600: #2049e2;
+  --color-acento-700: #1a39b7;
+  --color-acento-800: #1b3293;
+  --color-acento-900: #1c2f74;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, monospace;
+}
+
+/* Bases reutilizables. Se declaran como utilidades (no como clases sueltas)
+   para poder componerlas con @apply en las variantes de más abajo: en
+   Tailwind 4, @apply sólo acepta utilidades registradas. */
+
+@utility boton {
+  @apply inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg px-4 py-2.5
+         text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+@utility insignia {
+  @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold whitespace-nowrap;
+}
+
+@utility aviso {
+  @apply flex gap-3 rounded-lg border px-4 py-3 text-sm leading-relaxed;
+}
+
+@utility num {
+  font-variant-numeric: tabular-nums;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    background: var(--color-tinta-50);
+    color: var(--color-tinta-900);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-tinta-300) transparent;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-acento-500);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  .tarjeta {
+    @apply rounded-xl border border-tinta-200 bg-white shadow-[0_1px_2px_rgba(18,21,31,0.04)];
+  }
+  .tarjeta-cabecera {
+    @apply flex flex-wrap items-center justify-between gap-3 border-b border-tinta-200 px-5 py-4;
+  }
+  .titulo-seccion {
+    @apply text-sm font-semibold tracking-wide text-tinta-900;
+  }
+
+  .boton-primario {
+    @apply boton bg-acento-600 text-white hover:bg-acento-700;
+  }
+  .boton-secundario {
+    @apply boton border border-tinta-300 bg-white text-tinta-800 hover:bg-tinta-100;
+  }
+  .boton-sutil {
+    @apply boton text-tinta-600 hover:bg-tinta-100 hover:text-tinta-900;
+  }
+  .boton-peligro {
+    @apply boton border border-red-300 bg-white text-red-700 hover:bg-red-50;
+  }
+  .boton-chico {
+    @apply px-3 py-1.5 text-xs;
+  }
+
+  .campo {
+    @apply w-full rounded-lg border border-tinta-300 bg-white px-3 py-2.5 text-sm text-tinta-900
+           placeholder:text-tinta-400 focus:border-acento-500 focus:ring-2 focus:ring-acento-100 focus:outline-none;
+  }
+  .etiqueta {
+    @apply mb-1.5 block text-xs font-semibold tracking-wide text-tinta-600 uppercase;
+  }
+  .ayuda {
+    @apply mt-1.5 text-xs leading-relaxed text-tinta-500;
+  }
+
+  .insignia-ok {
+    @apply insignia bg-emerald-50 text-emerald-700;
+  }
+  .insignia-alerta {
+    @apply insignia bg-amber-100 text-amber-800;
+  }
+  .insignia-error {
+    @apply insignia bg-red-50 text-red-700;
+  }
+  .insignia-neutra {
+    @apply insignia bg-tinta-100 text-tinta-700;
+  }
+  .insignia-demo {
+    @apply insignia bg-violet-100 text-violet-800;
+  }
+
+  .tabla {
+    @apply w-full border-collapse text-sm;
+  }
+  .tabla thead th {
+    @apply border-b border-tinta-200 bg-tinta-50 px-4 py-3 text-left text-xs font-semibold
+           tracking-wide text-tinta-600 uppercase;
+  }
+  .tabla tbody td {
+    @apply border-b border-tinta-100 px-4 py-3 align-middle;
+  }
+  .tabla tbody tr:last-child td {
+    @apply border-b-0;
+  }
+
+  .aviso-info {
+    @apply aviso border-acento-200 bg-acento-50 text-acento-900;
+  }
+  .aviso-alerta {
+    @apply aviso border-amber-300 bg-amber-50 text-amber-900;
+  }
+  .aviso-error {
+    @apply aviso border-red-300 bg-red-50 text-red-900;
+  }
+  .aviso-demo {
+    @apply aviso border-violet-300 bg-violet-50 text-violet-900;
+  }
+}

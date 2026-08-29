@@ -1,0 +1,39 @@
+{
+  "name": "prode-corrector",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Plataforma de correccion automatica de Prode: lectura de boletas en PDF, motor de correccion auditable, ranking y exportacion.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "demo:pdf": "node scripts/generar-pdf-demo.mjs",
+    "probar-pdf": "node scripts/probar-analisis.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "next": "^15.5.24",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "4.8.69",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.13",
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "tailwindcss": "^4.1.13",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.4"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

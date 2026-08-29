@@ -109,16 +109,37 @@ export async function listarBoletas(fechaId: string): Promise<Boleta[]> {
  * permite a la pantalla mostrar "Guardando boletas: 500 de 1834" con números
  * reales en vez de quedarse congelada al final del procesamiento.
  */
+/**
+ * Reintenta UNA tanda antes de rendirse.
+ *
+ * Guardar miles de boletas son varias peticiones seguidas, y un corte de red de
+ * un segundo en la última no puede obligar a rehacer todas las anteriores. Se
+ * reintenta la tanda que falló, no el guardado entero.
+ */
+async function conReintentos<T>(fn: () => Promise<T>, que: string): Promise<T> {
+  let ultimo: unknown;
+  for (let intento = 1; intento <= 4; intento++) {
+    try {
+      return await fn();
+    } catch (e) {
+      ultimo = e;
+      if (intento < 4) await new Promise((r) => setTimeout(r, 800 * intento));
+    }
+  }
+  throw new Error(
+    `${que}: ${ultimo instanceof Error ? ultimo.message : String(ultimo)} (tras 4 intentos)`,
+  );
+}
+
 export async function reemplazarBoletas(
   fechaId: string,
   boletas: Boleta[],
   alGuardar?: (guardadas: number) => void,
 ): Promise<void> {
-  const { error: errBorrado } = await supabase()
-    .from(TABLA_BOLETAS)
-    .delete()
-    .eq("fecha_id", fechaId);
-  if (errBorrado) throw new Error(`No se pudieron borrar las boletas previas: ${errBorrado.message}`);
+  await conReintentos(async () => {
+    const { error } = await supabase().from(TABLA_BOLETAS).delete().eq("fecha_id", fechaId);
+    if (error) throw new Error(error.message);
+  }, "No se pudieron borrar las boletas previas");
 
   const tanda = 500;
   for (let i = 0; i < boletas.length; i += tanda) {
@@ -128,8 +149,10 @@ export async function reemplazarBoletas(
       orden: b.orden,
       datos: b,
     }));
-    const { error } = await supabase().from(TABLA_BOLETAS).insert(filas);
-    if (error) throw new Error(`No se pudieron guardar las boletas: ${error.message}`);
+    await conReintentos(async () => {
+      const { error } = await supabase().from(TABLA_BOLETAS).insert(filas);
+      if (error) throw new Error(error.message);
+    }, `No se pudieron guardar las boletas ${i + 1}-${i + filas.length}`);
     alGuardar?.(Math.min(i + tanda, boletas.length));
   }
 }

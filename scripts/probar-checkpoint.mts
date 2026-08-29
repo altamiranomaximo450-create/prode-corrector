@@ -9,8 +9,8 @@
  *   2. Arranca el worker y lo MATA de golpe (kill -9, sin avisar) apenas
  *      termina el primer pedazo. Es el peor caso: el runner se cae.
  *   3. Vuelve a arrancarlo y comprueba que:
- *        · los pedazos ya extraídos NO se vuelven a extraer (se mira la hora en
- *          que se guardaron: si cambiara, se habría hecho el trabajo de nuevo),
+ *        · los pedazos ya confirmados NO se vuelven a procesar (se mira qué
+ *          partes toca el segundo worker, según sus propios logs),
  *        · el trabajo termina completo igual.
  *
  * Sale con código 1 si algo no se cumple.
@@ -128,13 +128,27 @@ async function extraidas(): Promise<number> {
   return t ? t.chunks.filter((c) => c.estado === "extraido").length : 0;
 }
 
-async function horasDeGuardado(): Promise<Map<number, string>> {
-  const { data, error } = await supabase()
-    .from("prode_trabajo_paginas")
-    .select("indice,creado_en")
-    .eq("trabajo_id", trabajo.id);
-  if (error) fallar(`no se pudo leer el progreso: ${error.message}`);
-  return new Map((data ?? []).map((f) => [f.indice as number, f.creado_en as string]));
+/**
+ * Partes ya confirmadas como extraídas: eso es el checkpoint.
+ *
+ * Una parte que alcanzó a escribir sus páginas pero no llegó a confirmarse
+ * queda a medias a propósito, y rehacerla al reintentar es lo correcto.
+ */
+async function partesConfirmadas(): Promise<Set<number>> {
+  const t = await obtenerTrabajo(trabajo.id);
+  return new Set(
+    (t?.chunks ?? []).filter((c) => c.estado === "extraido").map((c) => c.indice),
+  );
+}
+
+/** Qué partes dice el worker que procesó, según sus propios logs. */
+function partesProcesadas(salida: string): Set<number> {
+  const partes = new Set<number>();
+  for (const linea of salida.split("\n")) {
+    const m = linea.match(/\[worker\] parte (\d+) \(páginas/);
+    if (m) partes.add(Number(m[1]));
+  }
+  return partes;
 }
 
 console.log("\n2. Arrancando el worker y cortándolo a la mitad...");
@@ -159,7 +173,7 @@ if (hechas >= PARTES) {
   );
 }
 
-const antes = await horasDeGuardado();
+const confirmadasAntes = await partesConfirmadas();
 console.log(`   ${hechas} de ${PARTES} partes listas. Matando el proceso de golpe (SIGKILL).`);
 primero.kill("SIGKILL");
 await dormir(500);
@@ -179,7 +193,7 @@ segundo.stderr?.on("data", (d) => (salidaSegundo += d.toString()));
 await new Promise<void>((resolver) => segundo.on("exit", () => resolver()));
 
 const final = await obtenerTrabajo(trabajo.id);
-const despues = await horasDeGuardado();
+const procesadasPorElSegundo = partesProcesadas(salidaSegundo);
 
 console.log("\n--- Resultado -------------------------------------------------");
 console.log(`estado final: ${final?.estado}  ·  boletas: ${final?.boletasDetectadas}`);
@@ -194,14 +208,19 @@ if (!salidaSegundo.includes("retomando desde el checkpoint")) {
   console.log("OK  el segundo worker retomó desde el checkpoint.");
 }
 
-for (const [indice, hora] of antes) {
-  if (despues.get(indice) !== hora) {
-    console.error(`FALLA: la parte ${indice} se volvió a extraer (se rehizo trabajo ya hecho).`);
-    errores += 1;
+let rehechas = 0;
+for (const indice of confirmadasAntes) {
+  if (procesadasPorElSegundo.has(indice)) {
+    console.error(`FALLA: la parte ${indice} ya estaba confirmada y se volvió a procesar.`);
+    rehechas += 1;
   }
 }
-if (errores === 0) {
-  console.log(`OK  las ${antes.size} parte(s) ya extraídas no se rehicieron.`);
+errores += rehechas;
+if (rehechas === 0) {
+  console.log(
+    `OK  las ${confirmadasAntes.size} parte(s) confirmadas antes del corte no se rehicieron ` +
+      `(el segundo worker procesó [${[...procesadasPorElSegundo].join(", ")}]).`,
+  );
 }
 
 if (final?.estado !== "completado") {

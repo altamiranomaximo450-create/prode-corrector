@@ -74,8 +74,11 @@ test.describe("corrector de prode", () => {
     await expect(page.getByText(/esperando al worker/i)).toHaveCount(0);
 
     // Dentro de este rato el worker ya tiene que estar leyendo páginas de
-    // verdad. Es LA prueba de que arrancó solo: nadie lo ejecutó.
-    await expect(progreso).toContainText(/Página [1-9]\d* \/ \d+/, { timeout: 4 * 60_000 });
+    // verdad. Es LA prueba de que arrancó solo: nadie lo ejecutó. En producción
+    // se le da más margen porque GitHub tarda en levantar el runner.
+    await expect(progreso).toContainText(/Página [1-9]\d* \/ \d+/, {
+      timeout: (process.env.PRODE_URL ? 8 : 4) * 60_000,
+    });
 
     const porcentaje = await page.locator(".porcentaje").innerText();
     expect(porcentaje).not.toBe("0%");

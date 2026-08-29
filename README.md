@@ -152,6 +152,14 @@ Vercel necesita permiso para pedirle a GitHub que arranque el workflow:
 Sin estas dos variables la aplicación **no finge** que arrancó: el trabajo queda
 con un mensaje que dice exactamente qué falta configurar, y se ve en pantalla.
 
+> Si el token tiene fecha de vencimiento, el día que caduque el procesamiento
+> deja de arrancar solo. No queda escondido: la pantalla muestra "GitHub rechazó
+> el token (401)". Se genera uno nuevo y se reemplaza en Vercel.
+
+> Cambiar cualquier variable en Vercel **no** afecta al sitio hasta el siguiente
+> deploy. Después de agregarlas hay que volver a desplegar (con `git push`, o
+> desde el panel: Deployments → ⋯ → Redeploy).
+
 ---
 
 ## Cómo arranca el procesamiento, en detalle
@@ -261,11 +269,15 @@ Están puestos acá para que no sorprendan:
 - **Almacenamiento de Supabase: 1 GB** en el plan gratuito. Las partes del PDF
   se borran solas al terminar cada trabajo, así que lo que se acumula son las
   boletas (texto), que ocupan muy poco.
-- **Minutos de GitHub Actions: 2.000 por mes** en un repositorio privado (en uno
-  público son ilimitados). Cada procesamiento usa entre 2 y 5 minutos, así que
-  alcanza para varios cientos de fechas por mes. Si se agotan, el worker deja de
-  arrancar hasta el mes siguiente: se ve en pantalla como un error de arranque,
-  no como un cuelgue.
+- **Minutos de GitHub Actions.** En un repositorio **público son ilimitados**;
+  en uno privado son 2.000 por mes, y cada procesamiento usa entre 2 y 5
+  minutos (alcanza para varios cientos de fechas mensuales). Si se agotaran, el
+  worker deja de arrancar hasta el mes siguiente y eso se ve en pantalla como un
+  error de arranque, no como un cuelgue. Ojo con el repositorio público: los
+  **logs de Actions quedan a la vista de cualquiera**. Los del worker no
+  imprimen nombres de participantes ni contenido de las boletas —sólo números de
+  página y cantidades— y las claves de Supabase van como secrets, que GitHub
+  enmascara.
 - **Duración máxima de un trabajo: 3 horas** (el tope del workflow; GitHub
   permite hasta 6). Con OCR se procesan del orden de 1 a 3 páginas por segundo,
   así que entran varios miles de boletas por corrida.

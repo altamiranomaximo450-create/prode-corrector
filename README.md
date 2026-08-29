@@ -118,12 +118,31 @@ npm run build
 ```
 
 En Vercel se despliega **sólo el frontend y las rutas de API** (que son livianas:
-crean la fecha, firman las subidas y consultan el progreso). Cargar las mismas
-variables de entorno en *Settings → Environment Variables*.
+crean la fecha, firman las subidas y consultan el progreso). Está desplegado en
+**https://prode-corrector.vercel.app**.
+
+Con la CLI de Vercel ya enlazada al proyecto (`npx vercel link`):
+
+```bash
+npx vercel env add NOMBRE_VARIABLE production preview development
+npx vercel --prod
+```
+
+Las 6 variables (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `PRODE_PDF_BUCKET`,
+`MAX_CHUNK_MB`) tienen que estar cargadas en los tres entornos antes de
+desplegar. Las dos `NEXT_PUBLIC_*` son JWT de Supabase, así que la CLI las
+detecta como credencial y exige el flag explícito `--type config` (exponerla al
+navegador es intencional: ver la sección de arriba) — sin eso, `vercel env add`
+falla en silencio para esa variable puntual y el sitio queda desplegado sin
+poder subir PDFs. Comprobar con `npx vercel env ls production` que las 6 estén
+antes de cada deploy.
 
 El worker **no va en Vercel**: corre donde haya Node y conexión a Supabase —la
 computadora del operador, un VPS, una Raspberry—. Sólo necesita `SUPABASE_URL` y
 `SUPABASE_SERVICE_ROLE_KEY` en su `.env.local`, y se arranca con `npm run worker`.
+Sin el worker corriendo, las fechas se crean y el PDF se sube, pero el trabajo
+queda en cola para siempre y la pantalla se queda en "esperando al worker".
 
 ## Scripts
 

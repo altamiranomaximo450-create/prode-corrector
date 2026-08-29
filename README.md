@@ -281,9 +281,12 @@ Están puestos acá para que no sorprendan:
 - **Duración máxima de un trabajo: 3 horas** (el tope del workflow; GitHub
   permite hasta 6). Con OCR se procesan del orden de 1 a 3 páginas por segundo,
   así que entran varios miles de boletas por corrida.
-- **Demora de arranque: entre 20 segundos y 1 minuto.** Es lo que tarda GitHub
-  en levantar el runner e instalar dependencias. Durante ese rato la pantalla
-  dice "Arrancando el worker", con el estado real.
+- **Demora de arranque: alrededor de un minuto.** GitHub tarda unos 10 segundos
+  en encolar la corrida y el resto es levantar el runner e instalar
+  dependencias. Durante ese rato la pantalla dice "Arrancando el worker", con el
+  estado real. Medido con el PDF de referencia (41 boletas escaneadas): **122
+  segundos** desde que se aprieta PROCESAR hasta el ranking, instalación
+  incluida.
 - **Los workflows programados se desactivan solos** si el repositorio pasa 60
   días sin actividad. Eso solo afecta a la red de seguridad de dos veces por
   día; el arranque por `repository_dispatch` sigue funcionando igual.

@@ -1,155 +1,385 @@
-@import "tailwindcss";
+/* CSS plano y corto: la aplicación es una sola pantalla. */
 
-@theme {
-  --color-tinta-50: #f6f7f9;
-  --color-tinta-100: #eceef2;
-  --color-tinta-200: #d5d9e2;
-  --color-tinta-300: #b0b8c8;
-  --color-tinta-400: #8590a8;
-  --color-tinta-500: #66728c;
-  --color-tinta-600: #515b73;
-  --color-tinta-700: #424a5d;
-  --color-tinta-800: #393f4e;
-  --color-tinta-900: #1e2330;
-  --color-tinta-950: #12151f;
-
-  --color-acento-50: #eef4ff;
-  --color-acento-100: #d9e6ff;
-  --color-acento-200: #bcd3ff;
-  --color-acento-300: #8eb6ff;
-  --color-acento-400: #598eff;
-  --color-acento-500: #3366f5;
-  --color-acento-600: #2049e2;
-  --color-acento-700: #1a39b7;
-  --color-acento-800: #1b3293;
-  --color-acento-900: #1c2f74;
-
-  --font-sans:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-    sans-serif;
-  --font-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, monospace;
+:root {
+  --tinta: #12151f;
+  --tinta-suave: #66728c;
+  --borde: #d5d9e2;
+  --fondo: #f6f7f9;
+  --panel: #ffffff;
+  --acento: #2049e2;
+  --acento-suave: #eef4ff;
+  --ok: #047857;
+  --mal: #b91c1c;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, monospace;
 }
 
-/* Bases reutilizables. Se declaran como utilidades (no como clases sueltas)
-   para poder componerlas con @apply en las variantes de más abajo: en
-   Tailwind 4, @apply sólo acepta utilidades registradas. */
-
-@utility boton {
-  @apply inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg px-4 py-2.5
-         text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+* {
+  box-sizing: border-box;
 }
 
-@utility insignia {
-  @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold whitespace-nowrap;
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--tinta);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
 }
 
-@utility aviso {
-  @apply flex gap-3 rounded-lg border px-4 py-3 text-sm leading-relaxed;
+.pantalla {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 32px 20px 64px;
 }
 
-@utility num {
+.titulo {
+  font-size: 28px;
+  margin: 0 0 4px;
+}
+
+.subtitulo {
+  margin: 0 0 24px;
+  color: var(--tinta-suave);
+}
+
+.tenue {
+  color: var(--tinta-suave);
+}
+
+.num {
+  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
 }
 
-@layer base {
-  html {
-    -webkit-text-size-adjust: 100%;
-  }
-  body {
-    background: var(--color-tinta-50);
-    color: var(--color-tinta-900);
-    font-family: var(--font-sans);
-    -webkit-font-smoothing: antialiased;
-  }
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: var(--color-tinta-300) transparent;
-  }
-  :focus-visible {
-    outline: 2px solid var(--color-acento-500);
-    outline-offset: 2px;
-    border-radius: 4px;
-  }
+/* ------------------------------- formulario ------------------------------ */
+
+.fila-datos {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
 }
 
-@layer components {
-  .tarjeta {
-    @apply rounded-xl border border-tinta-200 bg-white shadow-[0_1px_2px_rgba(18,21,31,0.04)];
-  }
-  .tarjeta-cabecera {
-    @apply flex flex-wrap items-center justify-between gap-3 border-b border-tinta-200 px-5 py-4;
-  }
-  .titulo-seccion {
-    @apply text-sm font-semibold tracking-wide text-tinta-900;
+.fila-datos label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fila-datos span {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--tinta-suave);
+}
+
+.campo {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  background: var(--panel);
+  font: inherit;
+  color: inherit;
+}
+
+.campo:focus {
+  outline: 2px solid var(--acento);
+  outline-offset: -1px;
+}
+
+.partidos {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+
+.partidos th {
+  text-align: left;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--tinta-suave);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--borde);
+}
+
+.partidos td {
+  padding: 8px 12px;
+  border-bottom: 1px solid #eceef2;
+  vertical-align: middle;
+}
+
+.partidos tr:last-child td {
+  border-bottom: none;
+}
+
+.col-num {
+  width: 40px;
+  text-align: center;
+}
+
+.col-res {
+  width: 320px;
+}
+
+.opciones {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.opcion {
+  cursor: pointer;
+  border: 1px solid var(--borde);
+  background: var(--panel);
+  color: var(--tinta-suave);
+  border-radius: 7px;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.opcion b {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.opcion:hover {
+  border-color: var(--acento);
+  color: var(--acento);
+}
+
+.opcion.activa {
+  background: var(--acento);
+  border-color: var(--acento);
+  color: #fff;
+}
+
+.zona {
+  border: 2px dashed var(--borde);
+  border-radius: 12px;
+  padding: 28px;
+  text-align: center;
+  background: var(--panel);
+  margin-bottom: 20px;
+}
+
+.zona.con-archivo {
+  border-color: var(--acento);
+  background: var(--acento-suave);
+}
+
+.zona-titulo {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+.zona p {
+  margin: 0 0 4px;
+}
+
+.boton,
+.boton-secundario {
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  border-radius: 9px;
+  padding: 12px 20px;
+  border: 1px solid transparent;
+}
+
+.boton {
+  width: 100%;
+  background: var(--acento);
+  color: #fff;
+  font-size: 15px;
+  letter-spacing: 0.03em;
+}
+
+.boton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.boton-secundario {
+  margin-top: 12px;
+  background: var(--panel);
+  border-color: var(--borde);
+  color: var(--tinta);
+  padding: 8px 16px;
+  font-size: 13px;
+}
+
+.error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: var(--mal);
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+/* ------------------------------- progreso -------------------------------- */
+
+.tarjeta {
+  background: var(--panel);
+  border: 1px solid var(--borde);
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.barra {
+  height: 10px;
+  background: #eceef2;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.barra-relleno {
+  height: 100%;
+  background: var(--acento);
+  border-radius: 999px;
+  transition: width 0.3s;
+}
+
+.porcentaje {
+  font-family: var(--mono);
+  font-size: 30px;
+  font-weight: 700;
+  margin: 14px 0 8px;
+}
+
+.progreso {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.progreso li {
+  padding: 3px 0;
+}
+
+/* -------------------------------- ranking -------------------------------- */
+
+.ranking {
+  list-style: none;
+  margin: 0 0 24px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.puesto {
+  background: var(--panel);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.puesto-cabecera {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 48px 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.puesto-cabecera:hover {
+  background: var(--acento-suave);
+}
+
+.posicion {
+  font-size: 22px;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.datos {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.datos strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.puntaje {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.puntaje strong {
+  font-size: 18px;
+}
+
+.detalle {
+  width: 100%;
+  border-collapse: collapse;
+  border-top: 1px solid var(--borde);
+  font-size: 13px;
+}
+
+.detalle td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #f2f4f7;
+}
+
+.detalle tr:last-child td {
+  border-bottom: none;
+}
+
+@media (max-width: 640px) {
+  .fila-datos,
+  .col-res {
+    grid-template-columns: 1fr;
+    width: auto;
   }
 
-  .boton-primario {
-    @apply boton bg-acento-600 text-white hover:bg-acento-700;
-  }
-  .boton-secundario {
-    @apply boton border border-tinta-300 bg-white text-tinta-800 hover:bg-tinta-100;
-  }
-  .boton-sutil {
-    @apply boton text-tinta-600 hover:bg-tinta-100 hover:text-tinta-900;
-  }
-  .boton-peligro {
-    @apply boton border border-red-300 bg-white text-red-700 hover:bg-red-50;
-  }
-  .boton-chico {
-    @apply px-3 py-1.5 text-xs;
+  .partidos,
+  .partidos thead,
+  .partidos tbody,
+  .partidos tr,
+  .partidos td {
+    display: block;
+    width: auto;
   }
 
-  .campo {
-    @apply w-full rounded-lg border border-tinta-300 bg-white px-3 py-2.5 text-sm text-tinta-900
-           placeholder:text-tinta-400 focus:border-acento-500 focus:ring-2 focus:ring-acento-100 focus:outline-none;
-  }
-  .etiqueta {
-    @apply mb-1.5 block text-xs font-semibold tracking-wide text-tinta-600 uppercase;
-  }
-  .ayuda {
-    @apply mt-1.5 text-xs leading-relaxed text-tinta-500;
+  .partidos thead {
+    display: none;
   }
 
-  .insignia-ok {
-    @apply insignia bg-emerald-50 text-emerald-700;
-  }
-  .insignia-alerta {
-    @apply insignia bg-amber-100 text-amber-800;
-  }
-  .insignia-error {
-    @apply insignia bg-red-50 text-red-700;
-  }
-  .insignia-neutra {
-    @apply insignia bg-tinta-100 text-tinta-700;
-  }
-  .insignia-demo {
-    @apply insignia bg-violet-100 text-violet-800;
+  .partidos tr {
+    border-bottom: 1px solid var(--borde);
+    padding: 8px 0;
   }
 
-  .tabla {
-    @apply w-full border-collapse text-sm;
-  }
-  .tabla thead th {
-    @apply border-b border-tinta-200 bg-tinta-50 px-4 py-3 text-left text-xs font-semibold
-           tracking-wide text-tinta-600 uppercase;
-  }
-  .tabla tbody td {
-    @apply border-b border-tinta-100 px-4 py-3 align-middle;
-  }
-  .tabla tbody tr:last-child td {
-    @apply border-b-0;
+  .partidos td {
+    border-bottom: none;
   }
 
-  .aviso-info {
-    @apply aviso border-acento-200 bg-acento-50 text-acento-900;
-  }
-  .aviso-alerta {
-    @apply aviso border-amber-300 bg-amber-50 text-amber-900;
-  }
-  .aviso-error {
-    @apply aviso border-red-300 bg-red-50 text-red-900;
-  }
-  .aviso-demo {
-    @apply aviso border-violet-300 bg-violet-50 text-violet-900;
+  .col-num {
+    text-align: left;
+    font-weight: 700;
   }
 }

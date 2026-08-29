@@ -2,7 +2,8 @@ node_modules/
 .next/
 out/
 build/
-.data/
+# PDFs de prueba generados por scripts/generar-pdf-prueba.mjs
+muestras/
 .env
 .env.local
 .env*.local

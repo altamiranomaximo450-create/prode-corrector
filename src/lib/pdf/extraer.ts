@@ -144,41 +144,47 @@ export async function extraerDocumento(
 
   try {
     for (let n = 1; n <= doc.numPages; n++) {
-      const pagina = await doc.getPage(n);
-      const viewport = pagina.getViewport({ scale: 1 });
-      const contenido = await pagina.getTextContent({
-        includeMarkedContent: false,
-        disableNormalization: false,
-      });
-
-      const tokens: Token[] = [];
-      for (const item of contenido.items as any[]) {
-        if (typeof item.str !== "string") continue;
-        const texto = item.str.trim();
-        if (texto === "") continue;
-        const tr = item.transform as number[];
-        const alto = Math.abs(item.height) || Math.hypot(tr[1], tr[3]) || 10;
-        tokens.push({
-          pagina: n,
-          x: tr[4],
-          y: tr[5],
-          ancho: Math.abs(item.width) || texto.length * alto * 0.5,
-          alto,
-          texto,
+      try {
+        const pagina = await doc.getPage(n);
+        const viewport = pagina.getViewport({ scale: 1 });
+        const contenido = await pagina.getTextContent({
+          includeMarkedContent: false,
+          disableNormalization: false,
         });
+
+        const tokens: Token[] = [];
+        for (const item of contenido.items as any[]) {
+          if (typeof item.str !== "string") continue;
+          const texto = item.str.trim();
+          if (texto === "") continue;
+          const tr = item.transform as number[];
+          const alto = Math.abs(item.height) || Math.hypot(tr[1], tr[3]) || 10;
+          tokens.push({
+            pagina: n,
+            x: tr[4],
+            y: tr[5],
+            ancho: Math.abs(item.width) || texto.length * alto * 0.5,
+            alto,
+            texto,
+          });
+        }
+
+        const lineas = agruparEnLineas(tokens, n);
+        paginas.push({
+          numero: n,
+          ancho: viewport.width,
+          alto: viewport.height,
+          tokens,
+          lineas,
+          caracteres: tokens.reduce((s, t) => s + t.texto.length, 0),
+        });
+
+        pagina.cleanup();
+      } catch {
+        // Una página rota (fuente corrupta, objeto ilegible) no puede tumbar el
+        // documento entero: se registra vacía y se sigue con las siguientes.
+        paginas.push({ numero: n, ancho: 0, alto: 0, tokens: [], lineas: [], caracteres: 0 });
       }
-
-      const lineas = agruparEnLineas(tokens, n);
-      paginas.push({
-        numero: n,
-        ancho: viewport.width,
-        alto: viewport.height,
-        tokens,
-        lineas,
-        caracteres: tokens.reduce((s, t) => s + t.texto.length, 0),
-      });
-
-      pagina.cleanup();
       onProgreso?.(n, doc.numPages);
     }
   } finally {

@@ -1,225 +1,148 @@
 import { describe, expect, it } from "vitest";
-import { corregirBoleta, corregirFecha } from "@/lib/correccion";
-import { crearBoleta, crearFecha, problemaError } from "./ayudas";
-import type { Pronostico } from "@/lib/tipos";
+import { corregirFecha } from "../src/lib/correccion";
+import type { Boleta, Fecha, Pronostico } from "../src/lib/tipos";
 
-const RESULTADOS: Pronostico[] = ["1", "X", "2", "1", "1", "X", "1", "2", "X", "1"];
+function fecha(resultados: (Pronostico | null)[]): Fecha {
+  return {
+    id: "f1",
+    nombre: "Fecha de prueba",
+    cantidadPartidos: resultados.length,
+    partidos: resultados.map((resultado, i) => ({
+      numero: i + 1,
+      nombre: `Partido ${i + 1}`,
+      resultado,
+    })),
+    creadaEn: "2026-01-01T00:00:00.000Z",
+    actualizadaEn: "2026-01-01T00:00:00.000Z",
+  };
+}
 
-describe("motor de corrección", () => {
-  it("cuenta 10 de 10 cuando el participante acierta todo", () => {
-    const fecha = crearFecha(RESULTADOS);
-    const fila = corregirBoleta(fecha, crearBoleta("b1", "Ana Torres", [...RESULTADOS]));
+let siguienteOrden = 0;
 
-    expect(fila.aciertos).toBe(10);
-    expect(fila.errores).toBe(0);
-    expect(fila.porcentaje).toBe(100);
-    expect(fila.detalle.every((d) => d.estado === "acierto")).toBe(true);
+function boleta(
+  id: string,
+  participante: string,
+  jugadas: (Pronostico[] | Pronostico)[],
+  numeroBoleta: string | null = null,
+  orden = siguienteOrden++,
+): Boleta {
+  return {
+    id,
+    fechaId: "f1",
+    orden,
+    participante,
+    numeroBoleta,
+    paginas: [1],
+    pronosticos: jugadas.map((j, i) => ({
+      partidoNumero: i + 1,
+      opciones: Array.isArray(j) ? j : [j],
+      evidencia: "",
+      pagina: 1,
+    })),
+    textoCrudo: "",
+    creadaEn: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+describe("cálculo de aciertos", () => {
+  it("cuenta un acierto cuando el pronóstico coincide con el resultado oficial", () => {
+    const r = corregirFecha(fecha(["1", "X", "2"]), [boleta("b1", "Ana", ["1", "X", "2"])]);
+    expect(r.ranking[0].aciertos).toBe(3);
+    expect(r.ranking[0].porcentaje).toBe(100);
   });
 
-  it("cuenta 0 de 10 cuando falla todo", () => {
-    const fecha = crearFecha(RESULTADOS);
-    // Se elige en cada partido una opción distinta a la oficial.
-    const fallados = RESULTADOS.map((r) => (r === "1" ? "2" : "1") as Pronostico);
-    const fila = corregirBoleta(fecha, crearBoleta("b2", "Ezequiel Molina", fallados));
-
-    expect(fila.aciertos).toBe(0);
-    expect(fila.errores).toBe(10);
-    expect(fila.porcentaje).toBe(0);
+  it("no cuenta los que no coinciden", () => {
+    const r = corregirFecha(fecha(["1", "X", "2"]), [boleta("b1", "Ana", ["2", "1", "X"])]);
+    expect(r.ranking[0].aciertos).toBe(0);
   });
 
-  it("no computa los partidos sin resultado oficial", () => {
-    const parciales: (Pronostico | null)[] = [...RESULTADOS];
-    parciales[8] = null;
-    parciales[9] = null;
-    const fecha = crearFecha(parciales);
-    const fila = corregirBoleta(fecha, crearBoleta("b3", "Juan Perez", [...RESULTADOS]));
-
-    expect(fila.partidosEvaluados).toBe(8);
-    expect(fila.aciertos).toBe(8);
-    expect(fila.porcentaje).toBe(100);
-    expect(fila.detalle.filter((d) => d.estado === "sin_resultado")).toHaveLength(2);
+  it("un doble acierta con cualquiera de sus dos opciones", () => {
+    const f = fecha(["1", "X", "2"]);
+    const r = corregirFecha(f, [
+      // 1/X contra resultado 1 -> acierto; contra X -> acierto; contra 2 -> fallo
+      boleta("b1", "Doble", [["1", "X"], ["1", "X"], ["1", "X"]]),
+    ]);
+    expect(r.ranking[0].aciertos).toBe(2);
+    expect(r.ranking[0].detalle.map((d) => d.estado)).toEqual(["acierto", "acierto", "error"]);
   });
 
-  it("marca los pronósticos ilegibles como sin_pronostico, sin adivinarlos", () => {
-    const fecha = crearFecha(RESULTADOS);
-    const con_hueco: (Pronostico | null)[] = [...RESULTADOS];
-    con_hueco[3] = null;
-    const fila = corregirBoleta(fecha, crearBoleta("b4", "Julieta Campos", con_hueco));
-
-    expect(fila.aciertos).toBe(9);
-    expect(fila.errores).toBe(0);
-    expect(fila.sinPronostico).toBe(1);
-    expect(fila.detalle[3].estado).toBe("sin_pronostico");
-    expect(fila.detalle[3].pronostico).toBeNull();
+  it("un partido sin resultado oficial no computa para nadie", () => {
+    const r = corregirFecha(fecha(["1", null, "2"]), [boleta("b1", "Ana", ["1", "X", "2"])]);
+    expect(r.ranking[0].aciertos).toBe(2);
+    expect(r.ranking[0].partidosEvaluados).toBe(2);
+    expect(r.ranking[0].detalle[1].estado).toBe("sin_resultado");
   });
 
-  it("trata una boleta incompleta (menos pronósticos que partidos) sin desplazar los demás", () => {
-    const fecha = crearFecha(RESULTADOS);
-    const incompleta = crearBoleta("b5", "Ramiro Benitez", RESULTADOS.slice(0, 9));
-    const fila = corregirBoleta(fecha, incompleta);
-
-    expect(fila.detalle).toHaveLength(10);
-    expect(fila.detalle[9].estado).toBe("sin_pronostico");
-    expect(fila.aciertos).toBe(9);
-  });
-
-  it("explica cada puntaje partido por partido", () => {
-    const fecha = crearFecha(RESULTADOS);
-    const pron: Pronostico[] = [...RESULTADOS];
-    pron[1] = "2";
-    const fila = corregirBoleta(fecha, crearBoleta("b6", "Martin Lopez", pron));
-
-    expect(fila.explicacion).toContain("Obtuvo 9 de 10");
-    expect(fila.explicacion).toContain("Falló:");
-    expect(fila.explicacion).toContain("marcó 2, salió X");
-  });
-});
-
-describe("dobles (dos opciones marcadas en el mismo partido)", () => {
-  it("acierta si el resultado oficial es cualquiera de las dos opciones del doble", () => {
-    const fecha = crearFecha(RESULTADOS); // partido 1 sale "1"
-    const pron: (Pronostico | Pronostico[])[] = [...RESULTADOS];
-    pron[0] = ["1", "X"]; // doble en el partido 1: acierta porque incluye "1"
-    const fila = corregirBoleta(fecha, crearBoleta("b7", "Doble Acierta", pron));
-
-    expect(fila.detalle[0].estado).toBe("acierto");
-    expect(fila.detalle[0].opciones).toEqual(["1", "X"]);
-    expect(fila.aciertos).toBe(10);
-  });
-
-  it("falla el doble si el resultado oficial no está entre las dos opciones", () => {
-    const fecha = crearFecha(RESULTADOS); // partido 1 sale "1"
-    const pron: (Pronostico | Pronostico[])[] = [...RESULTADOS];
-    pron[0] = ["X", "2"]; // ninguna es "1"
-    const fila = corregirBoleta(fecha, crearBoleta("b8", "Doble Falla", pron));
-
-    expect(fila.detalle[0].estado).toBe("error");
-    expect(fila.aciertos).toBe(9);
-    expect(fila.errores).toBe(1);
-  });
-
-  it("no trata un doble como boleta ilegible: no es sin_pronostico", () => {
-    const fecha = crearFecha(RESULTADOS);
-    const pron: (Pronostico | Pronostico[])[] = [...RESULTADOS];
-    pron[2] = ["1", "2"];
-    const fila = corregirBoleta(fecha, crearBoleta("b9", "Doble", pron));
-
-    expect(fila.detalle[2].estado).not.toBe("sin_pronostico");
-    expect(fila.sinPronostico).toBe(0);
+  it("un partido sin pronóstico leído vale 0 pero no excluye la boleta", () => {
+    const r = corregirFecha(fecha(["1", "X", "2"]), [boleta("b1", "Ana", ["1", [], "2"])]);
+    expect(r.ranking).toHaveLength(1);
+    expect(r.ranking[0].aciertos).toBe(2);
+    expect(r.ranking[0].detalle[1].estado).toBe("sin_pronostico");
   });
 });
 
 describe("ranking", () => {
-  it("ordena de mayor a menor y usa posiciones competitivas ante empates", () => {
-    const fecha = crearFecha(RESULTADOS);
-    const gana = [...RESULTADOS];
-    const ocho_a: Pronostico[] = [...RESULTADOS];
-    ocho_a[0] = "2";
-    ocho_a[1] = "1";
-    const ocho_b: Pronostico[] = [...RESULTADOS];
-    ocho_b[5] = "1";
-    ocho_b[6] = "2";
-
-    const correccion = corregirFecha(fecha, [
-      crearBoleta("b1", "Empatado B", ocho_b, { numeroBoleta: "311" }),
-      crearBoleta("b2", "Ganador", gana, { numeroBoleta: "201" }),
-      crearBoleta("b3", "Empatado A", ocho_a, { numeroBoleta: "052" }),
+  it("no deduplica participantes: tres boletas del mismo nombre son tres boletas", () => {
+    const f = fecha(["1", "X", "2"]);
+    const r = corregirFecha(f, [
+      boleta("b1", "Juan Perez", ["1", "X", "2"], "1"),
+      boleta("b2", "Juan Perez", ["1", "X", "1"], "2"),
+      boleta("b3", "Juan Perez", ["1", "1", "1"], "3"),
     ]);
-
-    expect(correccion.ranking.map((r) => r.posicion)).toEqual([1, 2, 2]);
-    expect(correccion.ranking[0].participante).toBe("Ganador");
-    expect(correccion.ranking[1].empatado).toBe(true);
-    expect(correccion.ranking[2].empatado).toBe(true);
+    expect(r.ranking).toHaveLength(3);
+    expect(r.resumen.boletas).toBe(3);
+    expect(r.ranking.map((x) => x.aciertos)).toEqual([3, 2, 1]);
   });
 
-  it("muestra a todos los empatados en el podio sin inventar un desempate", () => {
-    const fecha = crearFecha(RESULTADOS);
-    const correccion = corregirFecha(fecha, [
-      crearBoleta("b1", "Uno", [...RESULTADOS]),
-      crearBoleta("b2", "Dos", [...RESULTADOS]),
-      crearBoleta("b3", "Tres", [...RESULTADOS]),
+  it("los empatados comparten posición y ninguno se elimina", () => {
+    const f = fecha(["1", "X", "2"]);
+    const r = corregirFecha(f, [
+      boleta("b1", "Ana", ["1", "X", "2"], "10"),
+      boleta("b2", "Beto", ["1", "X", "2"], "11"),
+      boleta("b3", "Caro", ["1", "X", "1"], "12"),
     ]);
-
-    expect(correccion.top5).toHaveLength(1);
-    expect(correccion.top5[0].puesto).toBe(1);
-    expect(correccion.top5[0].empate).toBe(true);
-    expect(correccion.top5[0].participantes).toHaveLength(3);
+    expect(r.ranking.map((x) => x.posicion)).toEqual([1, 1, 3]);
+    expect(r.ranking[0].empatado).toBe(true);
+    expect(r.ranking[2].empatado).toBe(false);
   });
 
-  it("aplica la regla de desempate por partido clave cuando el administrador la define", () => {
-    const empatadoA: Pronostico[] = [...RESULTADOS];
-    empatadoA[0] = "2"; // falla el partido 1 (el clave)
-    const empatadoB: Pronostico[] = [...RESULTADOS];
-    empatadoB[4] = "2"; // acierta el partido 1
-
-    const fecha = crearFecha(RESULTADOS, {
-      config: { desempate: "partido_clave", partidoClave: 1 },
-    });
-    const correccion = corregirFecha(fecha, [
-      crearBoleta("b1", "Falla el clave", empatadoA),
-      crearBoleta("b2", "Acierta el clave", empatadoB),
-    ]);
-
-    expect(correccion.ranking[0].participante).toBe("Acierta el clave");
-    expect(correccion.ranking.map((r) => r.posicion)).toEqual([1, 2]);
-    expect(correccion.ranking[0].empatado).toBe(false);
+  it("el orden es determinístico: dos corridas dan el mismo resultado", () => {
+    const f = fecha(["1", "X", "2"]);
+    const boletas = [
+      boleta("b3", "Caro", ["1", "X", "2"], "30"),
+      boleta("b1", "Ana", ["1", "X", "2"], "10"),
+      boleta("b2", "Beto", ["1", "X", "2"], "20"),
+    ];
+    const a = corregirFecha(f, boletas).ranking.map((x) => x.boletaId);
+    const b = corregirFecha(f, [...boletas].reverse()).ranking.map((x) => x.boletaId);
+    expect(a).toEqual(b);
+    expect(a).toEqual(["b1", "b2", "b3"]); // por número de boleta
   });
 
-  it("deja fuera del ranking a las boletas en revisión, pero las sigue listando", () => {
-    const fecha = crearFecha(RESULTADOS);
-    const correccion = corregirFecha(fecha, [
-      crearBoleta("b1", "Válida", [...RESULTADOS]),
-      crearBoleta("b2", "Dudosa", [...RESULTADOS], { problemas: [problemaError()] }),
-    ]);
-
-    expect(correccion.ranking).toHaveLength(1);
-    expect(correccion.enRevision).toHaveLength(1);
-    expect(correccion.filas).toHaveLength(2);
-    expect(correccion.enRevision[0].motivoNoElegible).toContain("revisión manual");
-    expect(correccion.advertencias.join(" ")).toContain("requieren revisión manual");
+  it("desempata por orden en el PDF cuando todo lo demás es igual", () => {
+    const f = fecha(["1"]);
+    // Mismo nombre, misma página, sin número: sólo los distingue el orden en el
+    // PDF. El id no sirve porque es un UUID nuevo en cada procesamiento.
+    const boletas = [
+      boleta("uuid-z", "Juan Perez", ["1"], null, 2),
+      boleta("uuid-a", "Juan Perez", ["1"], null, 0),
+      boleta("uuid-m", "Juan Perez", ["1"], null, 1),
+    ];
+    const orden = corregirFecha(f, boletas).ranking.map((x) => x.boletaId);
+    expect(orden).toEqual(["uuid-a", "uuid-m", "uuid-z"]);
+    expect(corregirFecha(f, [...boletas].reverse()).ranking.map((x) => x.boletaId)).toEqual(orden);
   });
 
-  it("vuelve a incluir la boleta cuando se la da por revisada a mano", () => {
-    const fecha = crearFecha(RESULTADOS);
-    const correccion = corregirFecha(fecha, [
-      crearBoleta("b1", "Resuelta", [...RESULTADOS], {
-        problemas: [problemaError()],
-        estado: "resuelta_manual",
-      }),
-    ]);
-
-    expect(correccion.ranking).toHaveLength(1);
-    expect(correccion.ranking[0].estado).toBe("resuelta_manual");
-  });
-
-  it("avisa cuando faltan resultados oficiales", () => {
-    const fecha = crearFecha([...RESULTADOS.slice(0, 8), null, null]);
-    const correccion = corregirFecha(fecha, [crearBoleta("b1", "Ana", [...RESULTADOS])]);
-
-    expect(correccion.resumen.partidosSinResultado).toBe(2);
-    expect(correccion.advertencias.join(" ")).toContain("#9, #10");
-  });
-
-  it("calcula promedio, máximo y mínimo sólo sobre las boletas elegibles", () => {
-    const fecha = crearFecha(RESULTADOS);
-    const cero = RESULTADOS.map((r) => (r === "1" ? "2" : "1") as Pronostico);
-    const correccion = corregirFecha(fecha, [
-      crearBoleta("b1", "Diez", [...RESULTADOS]),
-      crearBoleta("b2", "Cero", cero),
-      crearBoleta("b3", "Excluida", [...RESULTADOS], { problemas: [problemaError()] }),
-    ]);
-
-    expect(correccion.resumen.maximoAciertos).toBe(10);
-    expect(correccion.resumen.minimoAciertos).toBe(0);
-    expect(correccion.resumen.promedioAciertos).toBe(5);
-    expect(correccion.resumen.participantes).toBe(3);
-  });
-
-  it("no rompe cuando no hay ninguna boleta", () => {
-    const correccion = corregirFecha(crearFecha(RESULTADOS), []);
-    expect(correccion.ranking).toHaveLength(0);
-    expect(correccion.top5).toHaveLength(0);
-    expect(correccion.resumen.promedioAciertos).toBeNull();
-    expect(correccion.advertencias.join(" ")).toContain("Todavía no hay boletas");
+  it("el top 10 conserva a todos los empatados en el décimo puesto", () => {
+    const f = fecha(["1"]);
+    // 9 con 1 acierto y 3 empatados con 0: las 3 comparten la posición 10.
+    const boletas = [
+      ...Array.from({ length: 9 }, (_, i) => boleta(`ok${i}`, `Gana ${i}`, ["1"], String(i + 1))),
+      ...Array.from({ length: 3 }, (_, i) => boleta(`no${i}`, `Pierde ${i}`, ["2"], String(50 + i))),
+    ];
+    const r = corregirFecha(f, boletas);
+    const top = r.ranking.filter((x) => x.posicion <= 10);
+    expect(top).toHaveLength(12);
+    expect(top.filter((x) => x.posicion === 10)).toHaveLength(3);
   });
 });

@@ -1,130 +1,55 @@
 /**
  * Modelo de dominio del corrector de Prode.
  *
- * Regla de oro del sistema: nada se infiere. Si un dato no se pudo leer con
- * certeza queda en `null` y se registra un problema explicando por que.
+ * Regla del sistema: una boleta que se leyó mal nunca detiene al resto ni queda
+ * fuera del ranking. Se interpreta lo mejor posible y se sigue. Lo único que se
+ * respeta a rajatabla es el cálculo: los resultados oficiales que carga el
+ * usuario son la única fuente de verdad y el conteo es 100% determinístico.
  */
 
 export type Pronostico = "1" | "X" | "2";
 
-export const PRONOSTICOS: Pronostico[] = ["1", "X", "2"];
-
-export const ETIQUETA_PRONOSTICO: Record<Pronostico, string> = {
-  "1": "Local",
-  X: "Empate",
-  "2": "Visitante",
-};
-
 export interface Partido {
   numero: number;
-  local: string;
-  visitante: string;
-  /** Resultado oficial. `null` = todavia no cargado. */
+  /** Nombre del partido tal como lo escribió el usuario. Puede venir vacío. */
+  nombre: string;
+  /** Resultado oficial. `null` = todavía no cargado: ese partido no computa para nadie. */
   resultado: Pronostico | null;
-}
-
-export type SeveridadProblema = "error" | "aviso";
-
-export type CodigoProblema =
-  | "SIN_CAPA_TEXTO"
-  | "NOMBRE_NO_DETECTADO"
-  | "NOMBRE_DUDOSO"
-  | "NUMERO_NO_DETECTADO"
-  | "CANTIDAD_PRONOSTICOS"
-  | "PRONOSTICO_AMBIGUO"
-  | "PRONOSTICO_DOBLE"
-  | "PRONOSTICO_FALTANTE"
-  | "PARTIDO_DESCONOCIDO"
-  | "BOLETA_INCOMPLETA"
-  | "DUPLICADO_BOLETA"
-  | "DUPLICADO_PARTICIPANTE"
-  | "DUPLICADO_NUMERO"
-  | "SEGMENTO_SIN_DATOS"
-  | "RESULTADO_OFICIAL_FALTANTE";
-
-export interface ProblemaBoleta {
-  codigo: CodigoProblema;
-  severidad: SeveridadProblema;
-  mensaje: string;
-  /** Pagina del PDF donde se detecto (1-based). */
-  pagina: number | null;
-  /** Fragmento textual exacto que provoco el problema. */
-  textoProblematico: string | null;
-  partidoNumero: number | null;
 }
 
 export interface PronosticoBoleta {
   partidoNumero: number;
-  /** `null` = no se pudo leer, o hay más de una opción marcada (ver `opciones`). */
-  valor: Pronostico | null;
   /**
-   * Todas las opciones marcadas para este partido. Normalmente una sola
-   * (`opciones.length === 1`, igual a `valor`). Si son dos, es un "doble"
-   * (ej.: "1/X"): una jugada válida y normal en el Prode, no un error de
-   * lectura. El acierto se calcula si el resultado oficial está entre las
-   * opciones. Vacío = no se pudo leer nada.
+   * Opciones marcadas para este partido. Una sola normalmente; dos si es un
+   * "doble" (ej. "1/X"), que es una jugada válida y acierta si el resultado
+   * oficial es cualquiera de las dos. Vacío = no se pudo leer nada.
    */
   opciones: Pronostico[];
-  origen: "pdf" | "manual";
-  /** 0..1 */
-  confianza: number;
-  /** Texto crudo del PDF del que se dedujo el valor. Base de la auditoria. */
+  /** Texto del PDF del que salió la lectura. Permite auditar cualquier acierto. */
   evidencia: string;
   pagina: number | null;
 }
 
-export type EstadoBoleta = "ok" | "revision" | "resuelta_manual";
-
 export interface Boleta {
   id: string;
   fechaId: string;
-  participante: string | null;
-  participanteConfianza: number;
-  participanteEvidencia: string | null;
+  /**
+   * Posición de la boleta dentro del PDF (0 es la primera). Es el último
+   * criterio de desempate del ranking: a diferencia del id, que es un UUID
+   * nuevo en cada procesamiento, el orden de aparición es siempre el mismo para
+   * el mismo PDF, y eso hace que el ranking sea reproducible.
+   */
+  orden: number;
+  /** Nombre leído del PDF. Nunca se deduplica: dos boletas del mismo nombre son dos boletas. */
+  participante: string;
+  /** Número impreso en la boleta, si se pudo leer. */
   numeroBoleta: string | null;
+  /** Páginas del PDF que ocupa esta boleta (una boleta puede abarcar varias). */
   paginas: number[];
   pronosticos: PronosticoBoleta[];
-  problemas: ProblemaBoleta[];
-  estado: EstadoBoleta;
-  /** Texto tal cual salio del PDF. Permite auditar cualquier lectura. */
+  /** Texto crudo del PDF. Base de la auditoría. */
   textoCrudo: string;
-  origen: "pdf" | "manual" | "demo";
-  editadaManualmente: boolean;
-  /** Estrategia del analizador que produjo esta boleta. */
-  metodoDeteccion: string;
   creadaEn: string;
-}
-
-export type EstadoFecha = "borrador" | "procesada" | "corregida";
-
-export type ReglaDesempate = "ninguna" | "partido_clave" | "orden_boleta";
-
-export interface ConfigFecha {
-  desempate: ReglaDesempate;
-  /** Numero de partido usado si `desempate === "partido_clave"`. */
-  partidoClave: number | null;
-}
-
-export interface DiagnosticoPdf {
-  nombreArchivo: string;
-  bytes: number;
-  paginas: number;
-  paginasConTexto: number[];
-  paginasSinTexto: number[];
-  caracteresExtraidos: number;
-  tieneCapaTexto: boolean;
-  metodo: "texto" | "sin-texto";
-  estrategiaSegmentacion: string;
-  puntajeEstrategia: number;
-  estrategiasEvaluadas: { nombre: string; boletas: number; puntaje: number }[];
-  procesadoEn: string;
-  milisegundos: number;
-}
-
-export interface EventoAuditoria {
-  fecha: string;
-  accion: string;
-  detalle: string;
 }
 
 export interface Fecha {
@@ -132,93 +57,50 @@ export interface Fecha {
   nombre: string;
   cantidadPartidos: number;
   partidos: Partido[];
-  estado: EstadoFecha;
-  esDemo: boolean;
-  config: ConfigFecha;
-  diagnostico: DiagnosticoPdf | null;
-  auditoria: EventoAuditoria[];
   creadaEn: string;
   actualizadaEn: string;
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Resultados de la correccion (siempre derivados, nunca almacenados)         */
+/*  Corrección (siempre derivada, nunca almacenada)                           */
 /* -------------------------------------------------------------------------- */
 
-export type EstadoDetalle =
-  | "acierto"
-  | "error"
-  | "sin_pronostico"
-  | "sin_resultado";
+export type EstadoDetalle = "acierto" | "error" | "sin_pronostico" | "sin_resultado";
 
 export interface DetallePartido {
   partidoNumero: number;
-  local: string;
-  visitante: string;
-  /** Opción única leída, o `null` si no hay una sola (ver `opciones`). */
-  pronostico: Pronostico | null;
-  /** Todas las opciones marcadas (1 normalmente, 2 si es un "doble"). */
+  nombre: string;
   opciones: Pronostico[];
   resultado: Pronostico | null;
   estado: EstadoDetalle;
   evidencia: string;
-  origen: "pdf" | "manual";
 }
 
-export interface FilaCorreccion {
+export interface FilaRanking {
+  posicion: number;
+  /** true si comparte posición con otra boleta. Ninguna se elimina por empatar. */
+  empatado: boolean;
   boletaId: string;
-  participante: string | null;
+  participante: string;
   numeroBoleta: string | null;
+  paginas: number[];
   aciertos: number;
-  errores: number;
-  sinPronostico: number;
-  /** Partidos con resultado oficial cargado. Denominador del porcentaje. */
+  /** Partidos con resultado oficial cargado. Denominador de los aciertos. */
   partidosEvaluados: number;
   porcentaje: number;
   detalle: DetallePartido[];
-  estado: EstadoBoleta;
-  problemas: ProblemaBoleta[];
-  /** Entra en el ranking? Las boletas en revision quedan fuera hasta resolverse. */
-  elegible: boolean;
-  motivoNoElegible: string | null;
-  /** Frase auditable: "Obtuvo X aciertos porque acerto los partidos ...". */
-  explicacion: string;
-  paginas: number[];
-  origen: "pdf" | "manual" | "demo";
-}
-
-export interface FilaRanking extends FilaCorreccion {
-  posicion: number;
-  empatado: boolean;
-}
-
-export interface GrupoPuesto {
-  puesto: 1 | 2 | 3 | 4 | 5;
-  aciertos: number;
-  participantes: FilaRanking[];
-  empate: boolean;
 }
 
 export interface ResumenFecha {
-  boletasTotales: number;
-  boletasOk: number;
-  boletasEnRevision: number;
-  boletasResueltasManualmente: number;
-  participantes: number;
+  boletas: number;
   partidosConResultado: number;
   partidosSinResultado: number;
-  promedioAciertos: number | null;
   maximoAciertos: number | null;
-  minimoAciertos: number | null;
 }
 
 export interface ResultadoCorreccion {
   fecha: Fecha;
-  filas: FilaCorreccion[];
+  /** Ranking completo, ordenado. La pantalla muestra el TOP 10. */
   ranking: FilaRanking[];
-  enRevision: FilaCorreccion[];
-  top5: GrupoPuesto[];
   resumen: ResumenFecha;
-  /** Advertencias globales (p. ej. faltan resultados oficiales). */
-  advertencias: string[];
 }

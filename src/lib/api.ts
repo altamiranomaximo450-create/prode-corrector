@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { ErrorValidacion } from "./servicio";
 import { ErrorProcesamiento } from "./pdf/procesar";
 
-/** Respuesta JSON con cabeceras que impiden que un proxy cachee datos privados. */
 export function json(datos: unknown, status = 200): NextResponse {
   return NextResponse.json(datos, {
     status,
@@ -10,25 +9,17 @@ export function json(datos: unknown, status = 200): NextResponse {
   });
 }
 
-export function error(mensaje: string, status = 400, extra?: Record<string, unknown>) {
-  return json({ error: mensaje, ...extra }, status);
+export function error(mensaje: string, status = 400): NextResponse {
+  return json({ error: mensaje }, status);
 }
 
-/**
- * Traduce cualquier excepción a una respuesta entendible.
- * Los errores inesperados se registran en el servidor pero no se devuelven al
- * cliente con su stack: podrían filtrar rutas o configuración.
- */
+/** Traduce cualquier excepción a una respuesta entendible, sin filtrar el stack. */
 export function manejarError(e: unknown): NextResponse {
-  if (e instanceof ErrorValidacion) {
-    return error(e.message, 400, e.campo ? { campo: e.campo } : undefined);
-  }
-  if (e instanceof ErrorProcesamiento) {
-    return error(e.message, 422, { diagnostico: e.diagnostico ?? null });
-  }
+  if (e instanceof ErrorValidacion) return error(e.message, 400);
+  if (e instanceof ErrorProcesamiento) return error(e.message, 422);
   console.error("[prode] error no controlado:", e);
   return error(
-    "Ocurrió un error inesperado en el servidor. Revisá los registros para el detalle.",
+    e instanceof Error ? e.message : "Ocurrió un error inesperado en el servidor.",
     500,
   );
 }

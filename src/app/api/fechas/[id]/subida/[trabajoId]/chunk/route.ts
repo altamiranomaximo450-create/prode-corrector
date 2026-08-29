@@ -1,4 +1,4 @@
-import { agregarChunk, obtenerTrabajo } from "@/lib/almacen/trabajos";
+import { agregarChunk, obtenerTrabajo } from "@/lib/trabajos";
 import { error, json, leerJson, manejarError } from "@/lib/api";
 
 export const runtime = "nodejs";
@@ -6,15 +6,12 @@ export const dynamic = "force-dynamic";
 
 type Contexto = { params: Promise<{ id: string; trabajoId: string }> };
 
-/** Confirma que un chunk ya se subió a Storage (el navegador ya lo escribió con el token firmado). */
+/** Confirma que el navegador ya escribió una parte en Storage. */
 export async function POST(req: Request, { params }: Contexto) {
   try {
     const { id, trabajoId } = await params;
     const trabajo = await obtenerTrabajo(trabajoId);
     if (!trabajo || trabajo.fechaId !== id) return error("El trabajo no existe.", 404);
-    if (trabajo.estado !== "subiendo") {
-      return error("Este trabajo ya no admite más chunks.", 409);
-    }
 
     const cuerpo = await leerJson<{
       indice?: unknown;
@@ -36,7 +33,7 @@ export async function POST(req: Request, { params }: Contexto) {
       !Number.isFinite(bytes) ||
       !storagePath
     ) {
-      return error("Faltan datos del chunk.", 400);
+      return error("Faltan datos de la parte subida.", 400);
     }
 
     const actualizado = await agregarChunk(trabajoId, {
@@ -48,7 +45,7 @@ export async function POST(req: Request, { params }: Contexto) {
       estado: "subido",
     });
 
-    return json({ chunksSubidos: actualizado.chunks.length });
+    return json({ partesSubidas: actualizado.chunks.length });
   } catch (e) {
     return manejarError(e);
   }

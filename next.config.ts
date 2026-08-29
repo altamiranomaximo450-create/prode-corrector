@@ -2,9 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  // pdfjs-dist y exceljs se ejecutan solo en el servidor: se dejan fuera del bundler
-  // para que Next no intente empaquetar sus dependencias nativas/opcionales.
-  serverExternalPackages: ["pdfjs-dist", "exceljs"],
+  // pdfjs-dist se ejecuta sólo en el servidor: se deja fuera del bundler para que
+  // Next no intente empaquetar sus dependencias opcionales.
+  serverExternalPackages: ["pdfjs-dist"],
   async headers() {
     return [
       {

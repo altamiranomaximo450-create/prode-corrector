@@ -2,9 +2,8 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Prode · Corrector de boletas",
-  description:
-    "Panel de administración para corregir automáticamente las boletas de una fecha del Prode.",
+  title: "Corrector de Prode",
+  description: "Cargá los resultados oficiales, subí el PDF de boletas y obtené el ranking.",
   robots: { index: false, follow: false },
 };
 

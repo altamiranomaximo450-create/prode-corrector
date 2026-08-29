@@ -1,310 +1,73 @@
 /**
- * Orquestador del procesamiento de un PDF de boletas.
+ * Convierte un documento ya extraído en las boletas de una fecha.
  *
- * extraer texto -> analizar boletas -> validar -> detectar duplicados.
+ * No lee ningún PDF: recibe el texto y las coordenadas ya extraídas. Así el
+ * worker puede procesar el archivo por partes sin tener nunca el PDF completo
+ * en memoria, y analizar una sola vez el documento combinado.
  *
- * Emite progreso real (no simulado) para que la interfaz muestre en qué etapa
- * está y no una barra decorativa.
+ * Nada de lo que pase con una boleta detiene a las demás: lo que no se pudo
+ * leer queda vacío (vale 0 en esa boleta) y el procesamiento continúa.
  */
 
 import { randomUUID } from "node:crypto";
-import { extraerDocumento, type DocumentoExtraido } from "./extraer";
-import { analizarDocumento, normalizar, type BoletaCruda } from "./analizar";
-import type {
-  Boleta,
-  DiagnosticoPdf,
-  Fecha,
-  ProblemaBoleta,
-  PronosticoBoleta,
-} from "../tipos";
-
-export type EtapaProceso =
-  | "leyendo"
-  | "extrayendo"
-  | "detectando"
-  | "participantes"
-  | "pronosticos"
-  | "validando"
-  | "duplicados"
-  | "listo"
-  | "error";
-
-export interface EventoProgreso {
-  etapa: EtapaProceso;
-  mensaje: string;
-  porcentaje: number;
-  detalle?: string;
-}
-
-export interface ResultadoProceso {
-  boletas: Boleta[];
-  diagnostico: DiagnosticoPdf;
-  /** Problemas que afectan al documento entero, no a una boleta concreta. */
-  problemasGlobales: ProblemaBoleta[];
-}
+import { analizarDocumento } from "./analizar";
+import type { DocumentoExtraido } from "./extraer";
+import type { Boleta, Fecha } from "../tipos";
 
 export class ErrorProcesamiento extends Error {
-  constructor(
-    message: string,
-    readonly diagnostico?: Partial<DiagnosticoPdf>,
-  ) {
+  constructor(message: string) {
     super(message);
     this.name = "ErrorProcesamiento";
   }
 }
 
-function huellaPronosticos(boleta: Boleta): string {
-  return boleta.pronosticos.map((p) => (p.opciones.length ? p.opciones.join("+") : "?")).join("|");
+export interface ResultadoProceso {
+  boletas: Boleta[];
+  estrategia: string;
+  paginas: number;
 }
 
-/**
- * Marca duplicados. Nunca elimina nada: una boleta repetida puede ser legítima
- * (alguien que juega dos veces) o un error de escaneo. Decide una persona.
- */
-export function detectarDuplicados(boletas: Boleta[]): void {
-  const porNombre = new Map<string, Boleta[]>();
-  const porNumero = new Map<string, Boleta[]>();
-  const porContenido = new Map<string, Boleta[]>();
-
-  for (const b of boletas) {
-    const nombre = normalizar(b.participante ?? "");
-    if (nombre) {
-      if (!porNombre.has(nombre)) porNombre.set(nombre, []);
-      porNombre.get(nombre)!.push(b);
-    }
-    if (b.numeroBoleta) {
-      if (!porNumero.has(b.numeroBoleta)) porNumero.set(b.numeroBoleta, []);
-      porNumero.get(b.numeroBoleta)!.push(b);
-    }
-    const clave = `${nombre}|${huellaPronosticos(b)}`;
-    if (!porContenido.has(clave)) porContenido.set(clave, []);
-    porContenido.get(clave)!.push(b);
-  }
-
-  for (const [nombre, grupo] of porNombre) {
-    if (grupo.length < 2) continue;
-    const paginas = [...new Set(grupo.flatMap((b) => b.paginas))].sort((a, b) => a - b).join(", ");
-    for (const b of grupo) {
-      b.problemas.push({
-        codigo: "DUPLICADO_PARTICIPANTE",
-        severidad: "error",
-        mensaje: `El participante "${b.participante}" aparece en ${grupo.length} boletas (páginas ${paginas}). Confirmá cuál vale antes de publicar el ranking.`,
-        pagina: b.paginas[0] ?? null,
-        textoProblematico: nombre,
-        partidoNumero: null,
-      });
-    }
-  }
-
-  for (const [numero, grupo] of porNumero) {
-    if (grupo.length < 2) continue;
-    for (const b of grupo) {
-      b.problemas.push({
-        codigo: "DUPLICADO_NUMERO",
-        severidad: "aviso",
-        mensaje: `El número de boleta #${numero} está repetido en ${grupo.length} boletas.`,
-        pagina: b.paginas[0] ?? null,
-        textoProblematico: `#${numero}`,
-        partidoNumero: null,
-      });
-    }
-  }
-
-  for (const [, grupo] of porContenido) {
-    if (grupo.length < 2) continue;
-    const paginas = [...new Set(grupo.flatMap((b) => b.paginas))].sort((a, b) => a - b).join(", ");
-    for (const b of grupo) {
-      b.problemas.push({
-        codigo: "DUPLICADO_BOLETA",
-        severidad: "error",
-        mensaje: `Boleta idéntica (mismo participante y mismos pronósticos) repetida ${grupo.length} veces en las páginas ${paginas}. Podría ser una hoja escaneada dos veces.`,
-        pagina: b.paginas[0] ?? null,
-        textoProblematico: huellaPronosticos(b),
-        partidoNumero: null,
-      });
-    }
-  }
-}
-
-/** Una boleta con algún problema de severidad "error" no entra al ranking. */
-export function recalcularEstado(boleta: Boleta): void {
-  if (boleta.estado === "resuelta_manual") return;
-  const hayError = boleta.problemas.some((p) => p.severidad === "error");
-  boleta.estado = hayError ? "revision" : "ok";
-}
-
-function aBoleta(cruda: BoletaCruda, fecha: Fecha): Boleta {
-  const pronosticos: PronosticoBoleta[] = cruda.valores.map((v, i) => ({
-    partidoNumero: i + 1,
-    valor: v.valor,
-    opciones: v.opciones,
-    origen: "pdf",
-    confianza: v.confianza,
-    evidencia: v.evidencia,
-    pagina: v.pagina,
-  }));
-
-  const boleta: Boleta = {
-    id: randomUUID(),
-    fechaId: fecha.id,
-    participante: cruda.participante,
-    participanteConfianza: cruda.participanteConfianza,
-    participanteEvidencia: cruda.participanteEvidencia,
-    numeroBoleta: cruda.numeroBoleta,
-    paginas: cruda.paginas,
-    pronosticos,
-    problemas: [...cruda.problemas],
-    estado: "ok",
-    textoCrudo: cruda.textoCrudo,
-    origen: "pdf",
-    editadaManualmente: false,
-    metodoDeteccion: cruda.metodo,
-    creadaEn: new Date().toISOString(),
-  };
-  return boleta;
-}
-
-/**
- * Analiza un documento YA EXTRAÍDO (texto + coordenadas) y produce las
- * boletas. Es el corazón compartido entre:
- *  - la carga sincrónica de un PDF chico (`procesarPdf`, más abajo), y
- *  - el worker de PDFs grandes, que arma el `DocumentoExtraido` combinando
- *    varios chunks extraídos por separado y llama a esta misma función una
- *    sola vez sobre el documento completo (ver `worker/index.ts`).
- *
- * No lee ningún PDF: recibe el documento ya extraído, así el worker nunca
- * necesita tener los bytes completos del PDF original en memoria a la vez.
- */
-export async function analizarYConstruir(
-  doc: DocumentoExtraido,
-  nombreArchivo: string,
-  bytesTotales: number,
-  fecha: Fecha,
-  onProgreso: (evento: EventoProgreso) => void,
-): Promise<ResultadoProceso> {
-  const inicio = Date.now();
-  const problemasGlobales: ProblemaBoleta[] = [];
-
-  const diagnosticoBase = {
-    nombreArchivo,
-    bytes: bytesTotales,
-    paginas: doc.paginas.length,
-    paginasConTexto: doc.paginasConTexto,
-    paginasSinTexto: doc.paginasSinTexto,
-    caracteresExtraidos: doc.totalCaracteres,
-    tieneCapaTexto: doc.tieneCapaTexto,
-    procesadoEn: new Date().toISOString(),
-  };
-
+export function analizarYConstruir(doc: DocumentoExtraido, fecha: Fecha): ResultadoProceso {
+  // Sólo se corta si NO hay una sola letra en todo el documento: ahí no hay
+  // nada que interpretar (un PDF escaneado sin capa de texto). Que algunas
+  // páginas vengan vacías no es motivo para detener nada.
   if (!doc.tieneCapaTexto) {
-    // PDF escaneado: no hay texto que leer. Se corta acá a propósito.
-    // Adivinar con un OCR no verificado violaría la regla de precisión.
     throw new ErrorProcesamiento(
-      "El PDF no tiene capa de texto: parece un escaneo o una foto. El sistema no interpreta imágenes, porque una lectura por OCR sin verificar podría asignar pronósticos equivocados. Volvé a exportar el PDF desde el programa que genera las boletas (no escaneado), o cargá las boletas a mano.",
-      { ...diagnosticoBase, metodo: "sin-texto" },
+      "El PDF no tiene texto: parece un escaneo o una foto. Volvé a exportarlo desde el " +
+        "programa que genera las boletas, eligiendo PDF con texto en vez de imagen.",
     );
   }
 
-  if (doc.paginasSinTexto.length > 0) {
-    problemasGlobales.push({
-      codigo: "SIN_CAPA_TEXTO",
-      severidad: "aviso",
-      mensaje: `Las páginas ${doc.paginasSinTexto.join(", ")} no tienen texto legible (podrían ser imágenes o estar en blanco). No se extrajo ninguna boleta de ellas.`,
-      pagina: doc.paginasSinTexto[0],
-      textoProblematico: null,
-      partidoNumero: null,
-    });
-  }
+  const analisis = analizarDocumento(doc, fecha.cantidadPartidos);
+  const ahora = new Date().toISOString();
 
-  onProgreso({
-    etapa: "detectando",
-    mensaje: "Detectando las boletas dentro del documento...",
-    porcentaje: 55,
-    detalle: `${doc.paginas.length} páginas, ${doc.totalCaracteres} caracteres`,
-  });
-
-  const analisis = analizarDocumento(doc, {
-    cantidadPartidos: fecha.cantidadPartidos,
-    partidos: fecha.partidos,
-  });
-
-  onProgreso({
-    etapa: "participantes",
-    mensaje: "Identificando participantes...",
-    porcentaje: 68,
-    detalle: `${analisis.boletas.length} boletas con la estrategia "${analisis.estrategia}"`,
-  });
-
-  onProgreso({
-    etapa: "pronosticos",
-    mensaje: "Extrayendo pronósticos...",
-    porcentaje: 78,
-  });
-
-  const boletas = analisis.boletas.map((c) => aBoleta(c, fecha));
-
-  onProgreso({
-    etapa: "validando",
-    mensaje: "Validando la información leída...",
-    porcentaje: 87,
-  });
-
-  onProgreso({
-    etapa: "duplicados",
-    mensaje: "Buscando duplicados...",
-    porcentaje: 93,
-  });
-
-  detectarDuplicados(boletas);
-  for (const b of boletas) recalcularEstado(b);
+  const boletas: Boleta[] = analisis.boletas.map((cruda, i) => ({
+    id: randomUUID(),
+    fechaId: fecha.id,
+    orden: i,
+    // Sin nombre legible se usa una etiqueta con la página: la boleta cuenta
+    // igual, y el operador puede ubicarla en el PDF para leerla a ojo.
+    participante:
+      cruda.participante ??
+      `Sin nombre (página ${cruda.paginas[0] ?? "?"}${cruda.numeroBoleta ? `, boleta ${cruda.numeroBoleta}` : ""})`,
+    numeroBoleta: cruda.numeroBoleta,
+    paginas: cruda.paginas,
+    pronosticos: cruda.valores.map((v, j) => ({
+      partidoNumero: j + 1,
+      opciones: v.opciones,
+      evidencia: v.evidencia,
+      pagina: v.pagina,
+    })),
+    textoCrudo: cruda.textoCrudo,
+    creadaEn: ahora,
+  }));
 
   if (boletas.length === 0) {
     throw new ErrorProcesamiento(
-      "No se reconoció ninguna boleta en el PDF. Revisá que el archivo sea el de boletas y que la cantidad de partidos de la fecha coincida con la de las boletas.",
-      { ...diagnosticoBase, metodo: "texto" },
+      "No se reconoció ninguna boleta en el PDF. Revisá que sea el archivo de boletas y que " +
+        "la cantidad de partidos de la fecha coincida con la de las boletas.",
     );
   }
 
-  const diagnostico: DiagnosticoPdf = {
-    ...diagnosticoBase,
-    metodo: "texto",
-    estrategiaSegmentacion: analisis.estrategia,
-    puntajeEstrategia: analisis.puntaje,
-    estrategiasEvaluadas: analisis.estrategiasEvaluadas,
-    milisegundos: Date.now() - inicio,
-  };
-
-  onProgreso({
-    etapa: "listo",
-    mensaje: "Listo",
-    porcentaje: 100,
-    detalle: `${boletas.length} boletas procesadas`,
-  });
-
-  return { boletas, diagnostico, problemasGlobales };
-}
-
-/**
- * Punto de entrada para un PDF chico que entra entero en memoria: lo extrae y
- * llama a `analizarYConstruir`. Es lo que usa la carga sincrónica (SSE) para
- * PDFs de hasta el tamaño admitido en una petición.
- */
-export async function procesarPdf(
-  datos: Uint8Array,
-  nombreArchivo: string,
-  fecha: Fecha,
-  onProgreso: (evento: EventoProgreso) => void,
-): Promise<ResultadoProceso> {
-  onProgreso({ etapa: "leyendo", mensaje: "Abriendo el PDF...", porcentaje: 4 });
-
-  const doc: DocumentoExtraido = await extraerDocumento(datos, (pagina, total) => {
-    onProgreso({
-      etapa: "extrayendo",
-      mensaje: "Extrayendo el texto del PDF...",
-      porcentaje: 5 + Math.round((pagina / Math.max(1, total)) * 45),
-      detalle: `Página ${pagina} de ${total}`,
-    });
-  });
-
-  return analizarYConstruir(doc, nombreArchivo, datos.byteLength, fecha, onProgreso);
+  return { boletas, estrategia: analisis.estrategia, paginas: doc.paginas.length };
 }

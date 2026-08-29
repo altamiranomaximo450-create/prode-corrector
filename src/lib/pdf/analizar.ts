@@ -1,19 +1,19 @@
 /**
  * Analizador de boletas.
  *
- * No asume un formato de boleta. Prueba varias estrategias de segmentación
- * (dónde empieza y termina cada boleta) y varios modos de lectura de
- * pronósticos, puntúa cada combinación y se queda con la que mejor explica el
- * documento. Todo lo que queda con dudas se marca para revisión manual: el
- * sistema nunca completa un dato por inferencia.
+ * No asume un formato: prueba varias maneras de partir el documento en boletas
+ * (por ancla textual, por página, por columnas, por bloques) y varias maneras de
+ * leer los pronósticos, puntúa cada combinación y se queda con la que mejor
+ * explica el documento. Una página puede tener varias boletas y una boleta
+ * puede ocupar varias páginas: por eso "una boleta por página" es sólo una de
+ * las estrategias, nunca un supuesto.
+ *
+ * Nada acá detiene el procesamiento. Lo que no se puede leer queda como
+ * pronóstico vacío (ese partido no suma) y la boleta sigue compitiendo.
  */
 
 import type { Linea, DocumentoExtraido, Token } from "./extraer";
-import type { Partido, ProblemaBoleta, Pronostico } from "../tipos";
-
-/* -------------------------------------------------------------------------- */
-/*  Utilidades de texto                                                       */
-/* -------------------------------------------------------------------------- */
+import type { Pronostico } from "../tipos";
 
 export function normalizar(texto: string): string {
   return texto
@@ -25,82 +25,37 @@ export function normalizar(texto: string): string {
 }
 
 const PALABRAS_ESTRUCTURA = new Set([
-  "prode",
-  "fecha",
-  "boleta",
-  "ficha",
-  "tarjeta",
-  "cupon",
-  "talon",
-  "partido",
-  "partidos",
-  "local",
-  "empate",
-  "visitante",
-  "resultado",
-  "resultados",
-  "pronostico",
-  "pronosticos",
-  "aciertos",
-  "total",
-  "puntaje",
-  "firma",
-  "planilla",
-  "torneo",
-  "jornada",
-  "equipo",
-  "equipos",
-  "vs",
-  "nombre",
-  "participante",
-  "jugador",
-  "numero",
-  "fecha:",
+  "prode", "fecha", "boleta", "ficha", "tarjeta", "cupon", "talon", "partido",
+  "partidos", "local", "empate", "visitante", "resultado", "resultados",
+  "pronostico", "pronosticos", "aciertos", "total", "puntaje", "firma",
+  "planilla", "torneo", "jornada", "equipo", "equipos", "vs", "nombre",
+  "participante", "jugador", "numero",
 ]);
 
 const MARCAS = /^[xX✓✔✗✘●•·*+]$/;
 
-/* -------------------------------------------------------------------------- */
-/*  Tipos                                                                     */
-/* -------------------------------------------------------------------------- */
-
 export interface ValorLeido {
-  /** Opción única, o `null` si hay 0, 2 (doble) o 3+ (ambiguo real) marcas. */
-  valor: Pronostico | null;
-  /** Todas las marcas distintas encontradas para este partido. */
+  /** Opciones marcadas: 1 normalmente, 2 si es un doble, vacío si no se leyó. */
   opciones: Pronostico[];
   evidencia: string;
   pagina: number | null;
-  confianza: number;
-  /** true sólo si hay 3 marcas (todas las opciones): no es un doble válido. */
-  ambiguo: boolean;
 }
 
 export interface BoletaCruda {
   participante: string | null;
-  participanteConfianza: number;
-  participanteEvidencia: string | null;
   numeroBoleta: string | null;
   paginas: number[];
   valores: ValorLeido[];
-  /** Cuántos pronósticos se leyeron ANTES de recortar/rellenar a la cantidad
-   *  esperada. Es la señal honesta de si la segmentación fue correcta. */
+  /** Cuántos pronósticos se leyeron ANTES de ajustar a la cantidad esperada.
+   *  Es la señal honesta de si la segmentación fue la correcta. */
   cantidadLeida: number;
-  problemas: ProblemaBoleta[];
   textoCrudo: string;
-  metodo: string;
-}
-
-export interface OpcionesAnalisis {
-  cantidadPartidos: number;
-  partidos: Partido[];
 }
 
 export interface ResultadoAnalisis {
   boletas: BoletaCruda[];
   estrategia: string;
   puntaje: number;
-  estrategiasEvaluadas: { nombre: string; boletas: number; puntaje: number }[];
 }
 
 interface Segmento {
@@ -109,23 +64,20 @@ interface Segmento {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Estrategias de segmentación                                               */
+/*  Segmentación: dónde empieza y termina cada boleta                         */
 /* -------------------------------------------------------------------------- */
 
 const ANCLAS: { nombre: string; re: RegExp }[] = [
   {
-    nombre: "ancla-boleta-numerada",
-    re: /\b(boleta|ficha|tarjeta|cup[oó]n|tal[oó]n|ticket)\b\s*(n[°ºo]?\.?|nro\.?|num\.?|#)?\s*:?\s*\d{1,6}\b/i,
+    nombre: "boleta-numerada",
+    re: /\b(boleta|ficha|tarjeta|cup[oó]n|tal[oó]n|ticket)\b\s*(n[°ºo]?\.?|nro\.?|num\.?|#)?\s*:?\s*\d{1,8}\b/i,
   },
+  { nombre: "boleta", re: /^\s*(boleta|ficha|tarjeta|cup[oó]n|tal[oó]n|ticket)\b/i },
   {
-    nombre: "ancla-boleta",
-    re: /^\s*(boleta|ficha|tarjeta|cup[oó]n|tal[oó]n|ticket)\b/i,
-  },
-  {
-    nombre: "ancla-participante",
+    nombre: "participante",
     re: /^\s*(participante|nombre y apellido|apellido y nombre|nombre|jugador|socio)\s*[:.\-]/i,
   },
-  { nombre: "ancla-prode", re: /^\s*prode\b/i },
+  { nombre: "prode", re: /^\s*prode\b/i },
 ];
 
 function lineasEnOrden(doc: DocumentoExtraido): Linea[] {
@@ -158,31 +110,6 @@ function segmentarPorPagina(doc: DocumentoExtraido): Segmento[] {
     .map((p) => ({ lineas: p.lineas, paginas: [p.numero] }));
 }
 
-/** Detecta columnas verticales (varias boletas lado a lado en la misma página). */
-function segmentarPorColumnas(doc: DocumentoExtraido): Segmento[] {
-  const segmentos: Segmento[] = [];
-  for (const pagina of doc.paginas) {
-    if (pagina.lineas.length === 0) continue;
-    const cortes = detectarCortesVerticales(pagina.tokens, pagina.ancho);
-    if (cortes.length === 0) {
-      segmentos.push({ lineas: pagina.lineas, paginas: [pagina.numero] });
-      continue;
-    }
-    const limites = [0, ...cortes, pagina.ancho];
-    for (let i = 0; i < limites.length - 1; i++) {
-      const desde = limites[i];
-      const hasta = limites[i + 1];
-      const lineas: Linea[] = [];
-      for (const linea of pagina.lineas) {
-        const centro = (linea.xInicio + linea.xFin) / 2;
-        if (centro >= desde && centro < hasta) lineas.push(linea);
-      }
-      if (lineas.length > 0) segmentos.push({ lineas, paginas: [pagina.numero] });
-    }
-  }
-  return segmentos.length > doc.paginas.length ? segmentos : [];
-}
-
 function detectarCortesVerticales(tokens: Token[], ancho: number): number[] {
   if (tokens.length < 20) return [];
   const bins = 60;
@@ -198,9 +125,8 @@ function detectarCortesVerticales(tokens: Token[], ancho: number): number[] {
     if (cubos[i] === 0) {
       if (inicioVacio === -1) inicioVacio = i;
     } else if (inicioVacio !== -1) {
-      const largo = i - inicioVacio;
-      // Un canal vacío de al menos ~5% del ancho, y no en los márgenes.
-      if (largo >= 3 && inicioVacio > bins * 0.12 && i < bins * 0.88) {
+      // Un canal vacío de al menos ~5% del ancho, y que no sea un margen.
+      if (i - inicioVacio >= 3 && inicioVacio > bins * 0.12 && i < bins * 0.88) {
         cortes.push(((inicioVacio + i) / 2 / bins) * ancho);
       }
       inicioVacio = -1;
@@ -209,16 +135,36 @@ function detectarCortesVerticales(tokens: Token[], ancho: number): number[] {
   return cortes;
 }
 
-/** Separa por bandas horizontales de espacio en blanco dentro de cada página. */
+/** Varias boletas lado a lado en la misma página. */
+function segmentarPorColumnas(doc: DocumentoExtraido): Segmento[] {
+  const segmentos: Segmento[] = [];
+  for (const pagina of doc.paginas) {
+    if (pagina.lineas.length === 0) continue;
+    const cortes = detectarCortesVerticales(pagina.tokens, pagina.ancho);
+    if (cortes.length === 0) {
+      segmentos.push({ lineas: pagina.lineas, paginas: [pagina.numero] });
+      continue;
+    }
+    const limites = [0, ...cortes, pagina.ancho];
+    for (let i = 0; i < limites.length - 1; i++) {
+      const lineas = pagina.lineas.filter((l) => {
+        const centro = (l.xInicio + l.xFin) / 2;
+        return centro >= limites[i] && centro < limites[i + 1];
+      });
+      if (lineas.length > 0) segmentos.push({ lineas, paginas: [pagina.numero] });
+    }
+  }
+  return segmentos.length > doc.paginas.length ? segmentos : [];
+}
+
+/** Varias boletas apiladas en la misma página, separadas por espacio en blanco. */
 function segmentarPorBloques(doc: DocumentoExtraido): Segmento[] {
   const segmentos: Segmento[] = [];
   for (const pagina of doc.paginas) {
     const lineas = pagina.lineas;
     if (lineas.length < 4) continue;
     const huecos: number[] = [];
-    for (let i = 1; i < lineas.length; i++) {
-      huecos.push(Math.abs(lineas[i - 1].y - lineas[i].y));
-    }
+    for (let i = 1; i < lineas.length; i++) huecos.push(Math.abs(lineas[i - 1].y - lineas[i].y));
     const ordenados = [...huecos].sort((a, b) => a - b);
     const mediana = ordenados[Math.floor(ordenados.length / 2)] || 12;
     const umbral = mediana * 2.4;
@@ -236,13 +182,13 @@ function segmentarPorBloques(doc: DocumentoExtraido): Segmento[] {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Modos de lectura de pronósticos                                           */
+/*  Lectura de pronósticos                                                    */
 /* -------------------------------------------------------------------------- */
 
 interface LecturaModo {
   modo: string;
   valores: ValorLeido[];
-  confianzaModo: number;
+  confianza: number;
 }
 
 function etiquetaColumna(texto: string): Pronostico | null {
@@ -253,6 +199,27 @@ function etiquetaColumna(texto: string): Pronostico | null {
   return null;
 }
 
+/**
+ * Interpreta un texto suelto como pronóstico simple o doble.
+ * Acepta las formas equivalentes que aparecen en las boletas: "1", "1/X",
+ * "X/1", "1 X", "1-X", "1X".
+ */
+export function interpretarPronostico(texto: string): Pronostico[] {
+  const piezas = texto
+    .trim()
+    .split(/[\s/,\-–|]+/)
+    .flatMap((p) => (/^[1xX2lLeEvV]{2}$/.test(p) ? p.split("") : [p]))
+    .filter(Boolean);
+  const opciones: Pronostico[] = [];
+  for (const p of piezas) {
+    const v = etiquetaColumna(p);
+    if (v && !opciones.includes(v)) opciones.push(v);
+  }
+  // Tres marcas no es un doble: no hay forma de saber qué quiso decir, así que
+  // ese partido queda sin pronóstico (vale 0) sin frenar nada.
+  return opciones.length > 2 ? [] : opciones;
+}
+
 interface EncabezadoGrilla {
   centros: { valor: Pronostico; x: number }[];
   indice: number;
@@ -260,22 +227,20 @@ interface EncabezadoGrilla {
 
 /**
  * Busca el renglón que hace de encabezado de columnas (1 / X / 2, o
- * Local / Empate / Visitante). Su presencia es determinante: si existe, el
- * pronóstico está codificado por POSICIÓN y leer el último token del renglón
- * daría siempre la misma marca. Por eso los modos "planos" se desactivan.
+ * Local / Empate / Visitante). Si existe, el pronóstico está codificado por
+ * POSICIÓN: leer el último token del renglón daría siempre la misma marca, así
+ * que los modos "planos" se desactivan.
  */
 function detectarEncabezadoGrilla(lineas: Linea[]): EncabezadoGrilla | null {
   for (let i = 0; i < lineas.length; i++) {
-    const candidatos: { valor: Pronostico; x: number }[] = [];
+    const unicos = new Map<Pronostico, number>();
     for (const t of lineas[i].tokens) {
       const et = etiquetaColumna(t.texto);
-      if (et) candidatos.push({ valor: et, x: t.x + t.ancho / 2 });
+      if (et && !unicos.has(et)) unicos.set(et, t.x + t.ancho / 2);
     }
-    const unicos = new Map<Pronostico, number>();
-    for (const c of candidatos) if (!unicos.has(c.valor)) unicos.set(c.valor, c.x);
     if (unicos.size !== 3) continue;
     const orden = [...unicos.entries()].sort((a, b) => a[1] - b[1]);
-    // El encabezado debe leerse 1, X, 2 de izquierda a derecha.
+    // El encabezado tiene que leerse 1, X, 2 de izquierda a derecha.
     if (orden[0][0] === "1" && orden[1][0] === "X" && orden[2][0] === "2") {
       return { centros: orden.map(([valor, x]) => ({ valor, x })), indice: i };
     }
@@ -283,22 +248,18 @@ function detectarEncabezadoGrilla(lineas: Linea[]): EncabezadoGrilla | null {
   return null;
 }
 
-/** Modo grilla: columnas 1 / X / 2 y una marca bajo la elegida. */
+/** Grilla: columnas 1 / X / 2 con una marca bajo la elegida. */
 function modoGrilla(lineas: Linea[]): LecturaModo | null {
   const encabezado = detectarEncabezadoGrilla(lineas);
   if (!encabezado) return null;
-  const centros = encabezado.centros;
-  const indiceEncabezado = encabezado.indice;
+  const { centros, indice } = encabezado;
 
-  const separacion = Math.min(
-    centros[1].x - centros[0].x,
-    centros[2].x - centros[1].x,
-  );
+  const separacion = Math.min(centros[1].x - centros[0].x, centros[2].x - centros[1].x);
   if (separacion <= 0) return null;
   const tolerancia = separacion * 0.45;
 
   const valores: ValorLeido[] = [];
-  for (let i = indiceEncabezado + 1; i < lineas.length; i++) {
+  for (let i = indice + 1; i < lineas.length; i++) {
     const linea = lineas[i];
     const golpes: Pronostico[] = [];
     for (const t of linea.tokens) {
@@ -312,142 +273,97 @@ function modoGrilla(lineas: Linea[]): LecturaModo | null {
     }
     if (golpes.length === 0) continue;
     const distintos = [...new Set(golpes)];
-    // Dos marcas es un "doble" válido y normal en el Prode (ej. "1/X"), no un
-    // error de lectura. Sólo tres marcas (todas las columnas) es ambiguo de
-    // verdad: ahí no hay forma de saber qué quiso decir el participante.
     valores.push({
-      valor: distintos.length === 1 ? distintos[0] : null,
-      opciones: distintos,
+      // Dos marcas es un doble válido. Tres es ilegible: queda vacío.
+      opciones: distintos.length <= 2 ? distintos : [],
       evidencia: linea.texto,
       pagina: linea.pagina,
-      confianza: distintos.length === 1 ? 0.95 : distintos.length === 2 ? 0.85 : 0,
-      ambiguo: distintos.length >= 3,
     });
   }
 
-  if (valores.length === 0) return null;
-  return { modo: "grilla-columnas", valores, confianzaModo: 0.95 };
+  return valores.length ? { modo: "grilla", valores, confianza: 0.95 } : null;
 }
 
-/** Modo línea: cada renglón de partido termina con 1, X o 2. */
+/** Cada renglón de partido termina con su pronóstico: "River vs Racing   1/X". */
 function modoLineaFinal(lineas: Linea[]): LecturaModo | null {
   const valores: ValorLeido[] = [];
   for (const linea of lineas) {
     if (linea.tokens.length < 2) continue;
-    const ultimo = linea.tokens[linea.tokens.length - 1].texto.trim();
-    const valor = etiquetaColumna(ultimo);
-    if (!valor || ultimo.length > 1) continue;
-    const resto = linea.texto.slice(0, linea.texto.length - ultimo.length);
-    // Debe haber texto de partido antes de la marca, no sólo números sueltos.
+    const m = linea.texto.match(/([1xX2](?:\s*[/\-–]?\s*[1xX2])?)\s*$/);
+    if (!m) continue;
+    const opciones = interpretarPronostico(m[1]);
+    if (opciones.length === 0) continue;
+    const resto = linea.texto.slice(0, linea.texto.length - m[0].length);
+    // Tiene que haber nombre de partido antes de la marca, no números sueltos.
     if ((resto.match(/[a-zA-ZÁÉÍÓÚÑáéíóúñ]/g) || []).length < 4) continue;
     if (PALABRAS_ESTRUCTURA.has(normalizar(resto).replace(/[^a-z]/g, ""))) continue;
-    valores.push({
-      valor,
-      opciones: [valor],
-      evidencia: linea.texto,
-      pagina: linea.pagina,
-      confianza: 0.9,
-      ambiguo: false,
-    });
+    valores.push({ opciones, evidencia: linea.texto, pagina: linea.pagina });
   }
-  if (valores.length === 0) return null;
-  return { modo: "linea-final", valores, confianzaModo: 0.9 };
+  return valores.length ? { modo: "linea-final", valores, confianza: 0.9 } : null;
 }
 
 /**
- * Modo numerado: "3) X", "Partido 3: 2", "3 - 1".
+ * Numerado: "3) X", "Partido 3: 2", "3 - 1/X".
  *
  * El valor tiene que estar pegado al número del partido. Se prohíbe texto
  * intermedio a propósito: si se permitiera, un renglón de grilla como
  * "3 Talleres vs Belgrano  X" se leería como "partido 3 = X", que es la marca
- * de la columna y no el pronóstico. Ese error fue detectado en pruebas.
+ * de la columna y no el pronóstico.
  */
 function modoNumerado(lineas: Linea[], esperado: number): LecturaModo | null {
   const mapa = new Map<number, ValorLeido>();
-  // Admite un doble pegado al número: "3) 1/X", "3) 1X".
-  const re = /^\s*(?:partido\s*)?(\d{1,2})\s*(?:[).:\-–]\s*|\s)\s*([1xX2])\s*\/?\s*([1xX2])?\s*$/;
+  const re = /^\s*(?:partido\s*)?(\d{1,2})\s*(?:[).:\-–]\s*|\s)\s*([1xX2](?:\s*[/\-–]?\s*[1xX2])?)\s*$/;
   for (const linea of lineas) {
     const m = linea.texto.match(re);
     if (!m) continue;
     const numero = Number(m[1]);
-    if (!Number.isFinite(numero) || numero < 1 || numero > esperado) continue;
-    const a = etiquetaColumna(m[2]);
-    const b = m[3] ? etiquetaColumna(m[3]) : null;
-    if (!a) continue;
-    const opciones = [...new Set([a, ...(b ? [b] : [])])];
-    if (mapa.has(numero)) {
-      const previo = mapa.get(numero)!;
-      const combinadas = [...new Set([...previo.opciones, ...opciones])];
-      mapa.set(numero, {
-        ...previo,
-        opciones: combinadas,
-        valor: combinadas.length === 1 ? combinadas[0] : null,
-        ambiguo: combinadas.length >= 3,
-      });
-      continue;
-    }
-    mapa.set(numero, {
-      valor: opciones.length === 1 ? opciones[0] : null,
-      opciones,
-      evidencia: linea.texto,
-      pagina: linea.pagina,
-      confianza: opciones.length === 1 ? 0.92 : 0.82,
-      ambiguo: false,
-    });
+    if (!Number.isInteger(numero) || numero < 1 || numero > esperado) continue;
+    const opciones = interpretarPronostico(m[2]);
+    if (opciones.length === 0) continue;
+    if (mapa.has(numero)) continue;
+    mapa.set(numero, { opciones, evidencia: linea.texto, pagina: linea.pagina });
   }
   if (mapa.size === 0) return null;
-  const valores: ValorLeido[] = [];
+
   const maximo = Math.max(...mapa.keys());
+  const valores: ValorLeido[] = [];
   for (let i = 1; i <= Math.max(maximo, mapa.size); i++) {
-    const v = mapa.get(i);
     valores.push(
-      v ?? {
-        valor: null,
-        opciones: [],
-        evidencia: `(no se encontró el renglón del partido ${i})`,
-        pagina: null,
-        confianza: 0,
-        ambiguo: false,
-      },
+      mapa.get(i) ?? { opciones: [], evidencia: "(sin lectura)", pagina: null },
     );
   }
-  return { modo: "numerado", valores, confianzaModo: 0.92 };
+  return { modo: "numerado", valores, confianza: 0.92 };
 }
 
-/** Modo secuencia: una tira "1 X 2 1 1 X ..." o "1X21 1X". Sólo si calza exacto. */
+/** Una tira suelta: "1 X 2 1 1 X ...". Sólo si la cantidad calza exacto. */
 function modoSecuencia(lineas: Linea[], esperado: number): LecturaModo | null {
   const items: { char: string; linea: Linea }[] = [];
   for (const linea of lineas) {
     for (const t of linea.tokens) {
       const txt = t.texto.trim();
       if (!/^[1xX2]+$/.test(txt)) continue;
-      for (const ch of txt) items.push({ char: ch, linea });
+      for (const ch of txt) items.push({ char: ch, linea: linea });
     }
   }
   if (items.length !== esperado) return null;
-  const valores: ValorLeido[] = items.map((it) => {
-    const valor = etiquetaColumna(it.char)!;
-    return {
-      valor,
-      opciones: [valor],
+  return {
+    modo: "secuencia",
+    valores: items.map((it) => ({
+      opciones: interpretarPronostico(it.char),
       evidencia: it.linea.texto,
       pagina: it.linea.pagina,
-      confianza: 0.7,
-      ambiguo: false,
-    };
-  });
-  return { modo: "secuencia", valores, confianzaModo: 0.7 };
+    })),
+    confianza: 0.7,
+  };
 }
 
 function leerPronosticos(lineas: Linea[], esperado: number): LecturaModo | null {
   const grilla = modoGrilla(lineas);
-
   // La lectura por posición manda: es la única que distingue una marca de un
-  // pronóstico escrito. Si cuadra con la cantidad de partidos, no se discute.
+  // pronóstico escrito. Si la cantidad calza, no se discute.
   if (grilla && grilla.valores.length === esperado) return grilla;
 
   const hayGrilla = detectarEncabezadoGrilla(lineas) !== null;
-
   const candidatos = [
     grilla,
     modoNumerado(lineas, esperado),
@@ -458,12 +374,11 @@ function leerPronosticos(lineas: Linea[], esperado: number): LecturaModo | null 
 
   if (candidatos.length === 0) return null;
 
-  const puntuar = (c: LecturaModo) => {
-    const exacto = c.valores.length === esperado ? 100 : 0;
-    const distancia = -Math.abs(c.valores.length - esperado) * 5;
-    const legibles = c.valores.filter((v) => v.valor !== null).length;
-    return exacto + distancia + legibles + c.confianzaModo * 10;
-  };
+  const puntuar = (c: LecturaModo) =>
+    (c.valores.length === esperado ? 100 : 0) -
+    Math.abs(c.valores.length - esperado) * 5 +
+    c.valores.filter((v) => v.opciones.length > 0).length +
+    c.confianza * 10;
 
   return candidatos.sort((a, b) => puntuar(b) - puntuar(a))[0];
 }
@@ -472,11 +387,16 @@ function leerPronosticos(lineas: Linea[], esperado: number): LecturaModo | null 
 /*  Participante y número de boleta                                           */
 /* -------------------------------------------------------------------------- */
 
-const RE_NOMBRE_ETIQUETADO =
+const RE_NOMBRE =
   /(?:participante|nombre y apellido|apellido y nombre|nombre|jugador|socio)\s*[:.\-]\s*(.+)$/i;
 
+// Admite las formas que aparecen en las boletas reales: "Boleta 201",
+// "BOLETA N 201", "Boleta N° 201", "Ficha Nro. 201", "Boleta: 201", "#201".
 const RE_NUMERO =
-  /(?:boleta|ficha|tarjeta|cup[oó]n|tal[oó]n|ticket|n[°ºo]\.?|nro\.?|#)\s*[:.\-]?\s*(\d{1,6})\b/i;
+  /(?:boleta|ficha|tarjeta|cup[oó]n|tal[oó]n|ticket)\s*(?:n[°ºo]?\.?|nro\.?|num\.?|#)?\s*[:.\-]?\s*(\d{1,8})\b/i;
+
+/** Respaldo para cuando el número va solo, sin la palabra "boleta" delante. */
+const RE_NUMERO_SUELTO = /(?:n[°º]\.?|nro\.?|#)\s*[:.\-]?\s*(\d{1,8})\b/i;
 
 function limpiarNombre(bruto: string): string {
   return bruto
@@ -494,262 +414,92 @@ function pareceNombrePersona(texto: string): boolean {
   if (/\bvs\.?\b|\s[-–]\s/i.test(limpio)) return false;
   const palabras = limpio.split(/\s+/);
   if (palabras.length < 2 || palabras.length > 5) return false;
-  for (const p of palabras) {
-    if (PALABRAS_ESTRUCTURA.has(normalizar(p))) return false;
-  }
+  if (palabras.some((p) => PALABRAS_ESTRUCTURA.has(normalizar(p)))) return false;
   return palabras.every((p) => /^[A-ZÁÉÍÓÚÑ][\p{L}'.\-]*$/u.test(p) || p.length <= 3);
 }
 
-function detectarParticipante(lineas: Linea[]): {
-  nombre: string | null;
-  confianza: number;
-  evidencia: string | null;
-} {
+/**
+ * Nombre del participante. Primero una etiqueta explícita ("Participante: ..."),
+ * y si no hay, la primera línea del encabezado que parezca un nombre de persona.
+ * Nunca se deduplica ni se corrige: dos boletas con el mismo nombre son dos
+ * boletas distintas y las dos cuentan.
+ */
+function detectarParticipante(lineas: Linea[]): string | null {
   for (const linea of lineas) {
-    const m = linea.texto.match(RE_NOMBRE_ETIQUETADO);
+    const m = linea.texto.match(RE_NOMBRE);
     if (m) {
       const nombre = limpiarNombre(m[1]);
-      if (nombre.length >= 3 && /[a-zA-ZÁÉÍÓÚÑáéíóúñ]/.test(nombre)) {
-        return { nombre, confianza: 0.96, evidencia: linea.texto };
-      }
+      if (nombre.length >= 3 && /[a-zA-ZÁÉÍÓÚÑáéíóúñ]/.test(nombre)) return nombre;
     }
   }
   for (const linea of lineas.slice(0, 8)) {
     const limpio = limpiarNombre(linea.texto);
-    if (pareceNombrePersona(limpio)) {
-      return { nombre: limpio, confianza: 0.6, evidencia: linea.texto };
-    }
+    if (pareceNombrePersona(limpio)) return limpio;
   }
-  return { nombre: null, confianza: 0, evidencia: null };
+  return null;
 }
 
-function detectarNumero(lineas: Linea[]): { numero: string | null; evidencia: string | null } {
+function detectarNumero(lineas: Linea[]): string | null {
   for (const linea of lineas) {
     const m = linea.texto.match(RE_NUMERO);
-    if (m) return { numero: m[1], evidencia: linea.texto };
+    if (m) return m[1];
   }
-  return { numero: null, evidencia: null };
+  for (const linea of lineas) {
+    const m = linea.texto.match(RE_NUMERO_SUELTO);
+    if (m) return m[1];
+  }
+  return null;
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Construcción de una boleta a partir de un segmento                        */
+/*  Construcción y elección de estrategia                                     */
 /* -------------------------------------------------------------------------- */
 
-function problema(
-  codigo: ProblemaBoleta["codigo"],
-  severidad: ProblemaBoleta["severidad"],
-  mensaje: string,
-  pagina: number | null = null,
-  textoProblematico: string | null = null,
-  partidoNumero: number | null = null,
-): ProblemaBoleta {
-  return { codigo, severidad, mensaje, pagina, textoProblematico, partidoNumero };
-}
-
-function verificarOrdenPartidos(
-  valores: ValorLeido[],
-  partidos: Partido[],
-): ProblemaBoleta[] {
-  if (partidos.length === 0 || valores.length !== partidos.length) return [];
-  let comparables = 0;
-  let coincidencias = 0;
-  for (let i = 0; i < valores.length; i++) {
-    const evidencia = normalizar(valores[i].evidencia);
-    if ((evidencia.match(/[a-z]/g) || []).length < 6) continue;
-    comparables += 1;
-    const local = normalizar(partidos[i].local);
-    const visitante = normalizar(partidos[i].visitante);
-    const hit =
-      (local.length > 3 && evidencia.includes(local)) ||
-      (visitante.length > 3 && evidencia.includes(visitante));
-    if (hit) coincidencias += 1;
-  }
-  if (comparables >= 3 && coincidencias / comparables < 0.5) {
-    return [
-      problema(
-        "PARTIDO_DESCONOCIDO",
-        "aviso",
-        `Los nombres de equipos leídos en la boleta coinciden con los partidos cargados en sólo ${coincidencias} de ${comparables} renglones. Verificá que el orden de los partidos sea el mismo.`,
-        valores[0]?.pagina ?? null,
-        valores.slice(0, 3).map((v) => v.evidencia).join(" | "),
-      ),
-    ];
-  }
-  return [];
-}
-
-function construirBoleta(segmento: Segmento, opciones: OpcionesAnalisis): BoletaCruda {
-  const { cantidadPartidos, partidos } = opciones;
-  const lineas = segmento.lineas;
-  const textoCrudo = lineas.map((l) => `[p.${l.pagina}] ${l.texto}`).join("\n");
-  const problemas: ProblemaBoleta[] = [];
-
-  const { nombre, confianza, evidencia } = detectarParticipante(lineas);
-  const { numero } = detectarNumero(lineas);
+function construirBoleta(segmento: Segmento, cantidadPartidos: number): BoletaCruda {
+  const { lineas } = segmento;
   const lectura = leerPronosticos(lineas, cantidadPartidos);
-
-  if (!nombre) {
-    problemas.push(
-      problema(
-        "NOMBRE_NO_DETECTADO",
-        "error",
-        "No se pudo identificar el nombre del participante en esta boleta.",
-        segmento.paginas[0] ?? null,
-        lineas.slice(0, 3).map((l) => l.texto).join(" | "),
-      ),
-    );
-  } else if (confianza < 0.8) {
-    problemas.push(
-      problema(
-        "NOMBRE_DUDOSO",
-        "aviso",
-        `El nombre "${nombre}" se dedujo de una línea sin etiqueta explícita. Confirmalo antes de publicar el ranking.`,
-        segmento.paginas[0] ?? null,
-        evidencia,
-      ),
-    );
-  }
-
-  if (!numero) {
-    problemas.push(
-      problema(
-        "NUMERO_NO_DETECTADO",
-        "aviso",
-        "La boleta no declara un número identificatorio legible.",
-        segmento.paginas[0] ?? null,
-        null,
-      ),
-    );
-  }
 
   let valores: ValorLeido[] = lectura?.valores ?? [];
   const cantidadLeida = valores.length;
 
-  if (!lectura || valores.length === 0) {
-    problemas.push(
-      problema(
-        "SEGMENTO_SIN_DATOS",
-        "error",
-        "No se detectó ningún pronóstico legible en esta boleta.",
-        segmento.paginas[0] ?? null,
-        lineas.slice(0, 5).map((l) => l.texto).join(" | "),
-      ),
-    );
-  } else if (valores.length !== cantidadPartidos) {
-    problemas.push(
-      problema(
-        "CANTIDAD_PRONOSTICOS",
-        "error",
-        `Se leyeron ${valores.length} pronósticos y la fecha tiene ${cantidadPartidos} partidos. No se puede saber a qué partido corresponde cada marca: hay que revisarla a mano.`,
-        segmento.paginas[0] ?? null,
-        valores.map((v) => v.evidencia).slice(0, 5).join(" | "),
-      ),
-    );
-    // Se conservan las lecturas para que el revisor las vea, pero sin asignarlas.
-    valores = valores.slice(0, cantidadPartidos);
-    while (valores.length < cantidadPartidos) {
-      valores.push({
-        valor: null,
-        opciones: [],
-        evidencia: "(sin lectura)",
-        pagina: null,
-        confianza: 0,
-        ambiguo: false,
-      });
-    }
-  }
-
-  valores.forEach((v, i) => {
-    if (v.ambiguo) {
-      // Tres (o más) marcas en el mismo partido: eso sí es un error de
-      // lectura, no un doble. No hay forma de saber qué quiso decir.
-      problemas.push(
-        problema(
-          "PRONOSTICO_AMBIGUO",
-          "error",
-          `El partido ${i + 1} tiene ${v.opciones.length} opciones marcadas (${v.opciones.join("/")}). No es un doble válido: no se interpreta.`,
-          v.pagina,
-          v.evidencia,
-          i + 1,
-        ),
-      );
-    } else if (v.opciones.length === 0 && lectura) {
-      problemas.push(
-        problema(
-          "PRONOSTICO_FALTANTE",
-          "error",
-          `El partido ${i + 1} no tiene un pronóstico legible.`,
-          v.pagina,
-          v.evidencia,
-          i + 1,
-        ),
-      );
-    } else if (v.opciones.length === 2) {
-      // Doble: jugada normal y válida en el Prode. No bloquea el ranking;
-      // acierta si el resultado oficial coincide con cualquiera de las dos.
-      problemas.push(
-        problema(
-          "PRONOSTICO_DOBLE",
-          "aviso",
-          `El partido ${i + 1} tiene un doble marcado: ${v.opciones.join("/")}.`,
-          v.pagina,
-          v.evidencia,
-          i + 1,
-        ),
-      );
-    }
-  });
-
-  if (lectura && valores.length === cantidadPartidos) {
-    problemas.push(...verificarOrdenPartidos(valores, partidos));
+  // Se ajusta a la cantidad de partidos de la fecha. Si se leyeron de más se
+  // recortan, si faltan se completan vacíos: esos partidos valen 0 para esta
+  // boleta, pero la boleta entra al ranking igual.
+  valores = valores.slice(0, cantidadPartidos);
+  while (valores.length < cantidadPartidos) {
+    valores.push({ opciones: [], evidencia: "(sin lectura)", pagina: null });
   }
 
   return {
-    participante: nombre,
-    participanteConfianza: confianza,
-    participanteEvidencia: evidencia,
-    numeroBoleta: numero,
+    participante: detectarParticipante(lineas),
+    numeroBoleta: detectarNumero(lineas),
     paginas: segmento.paginas,
     valores,
     cantidadLeida,
-    problemas,
-    textoCrudo,
-    metodo: lectura?.modo ?? "sin-lectura",
+    textoCrudo: lineas.map((l) => `[p.${l.pagina}] ${l.texto}`).join("\n"),
   };
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Puntuación de estrategias y análisis principal                            */
-/* -------------------------------------------------------------------------- */
-
 /**
- * Puntúa una segmentación completa. La señal más fuerte es la cantidad de
- * boletas que quedan limpias: una estrategia que produce muchas boletas con
- * error está partiendo el documento por el lugar equivocado.
+ * Puntúa una segmentación completa. La señal más fuerte es cuántas boletas
+ * leyeron exactamente la cantidad de partidos de la fecha: una estrategia que
+ * parte el documento por el lugar equivocado lee de más o de menos.
  */
-function puntuarBoletas(boletas: BoletaCruda[], esperado: number): number {
+function puntuar(boletas: BoletaCruda[], esperado: number): number {
   if (boletas.length === 0) return -1000;
   let puntaje = 0;
   for (const b of boletas) {
-    const errores = b.problemas.filter((p) => p.severidad === "error").length;
-    if (errores > 0) puntaje -= 10 + Math.min(errores, 4) * 2;
+    if (b.cantidadLeida === esperado) puntaje += 10;
+    else puntaje -= Math.min(10, Math.abs(b.cantidadLeida - esperado));
 
-    // Se mide la cantidad REALMENTE leída, no la ya recortada a `esperado`.
-    if (b.cantidadLeida === esperado) puntaje += 8;
-    else puntaje -= Math.min(8, Math.abs(b.cantidadLeida - esperado));
-
-    // Un doble (2 opciones) es legible y válido, aunque `valor` quede en null.
-    const legibles = b.valores.filter((v) => v.opciones.length >= 1 && v.opciones.length <= 2).length;
-    puntaje += (legibles / Math.max(1, esperado)) * 4;
-
-    if (b.participante) puntaje += b.participanteConfianza > 0.8 ? 3 : 1.5;
-    else puntaje -= 3;
+    puntaje += (b.valores.filter((v) => v.opciones.length > 0).length / esperado) * 4;
+    puntaje += b.participante ? 3 : -3;
     if (b.numeroBoleta) puntaje += 1;
 
     // Red de seguridad: una boleta larga con un único valor repetido casi
-    // siempre significa que se leyó la marca de la columna, no el pronóstico.
-    // Es posible que alguien juegue todo "1", por eso la penalización es leve.
-    const distintos = new Set(b.valores.map((v) => v.valor).filter((v) => v !== null));
+    // siempre significa que se leyó la marca de la columna y no el pronóstico.
+    // Alguien puede jugar todo "1", por eso la penalización es leve.
+    const distintos = new Set(b.valores.filter((v) => v.opciones.length === 1).map((v) => v.opciones[0]));
     if (b.valores.length >= 6 && distintos.size === 1) puntaje -= 2.5;
   }
   return Math.round((puntaje / boletas.length) * 100) / 100;
@@ -757,58 +507,30 @@ function puntuarBoletas(boletas: BoletaCruda[], esperado: number): number {
 
 export function analizarDocumento(
   doc: DocumentoExtraido,
-  opciones: OpcionesAnalisis,
+  cantidadPartidos: number,
 ): ResultadoAnalisis {
   const estrategias: { nombre: string; segmentos: Segmento[] }[] = [];
 
   for (const ancla of ANCLAS) {
     const segmentos = segmentarPorAncla(doc, ancla.re);
-    if (segmentos.length > 0) estrategias.push({ nombre: ancla.nombre, segmentos });
+    if (segmentos.length > 0) estrategias.push({ nombre: `ancla-${ancla.nombre}`, segmentos });
   }
-  estrategias.push({ nombre: "una-boleta-por-pagina", segmentos: segmentarPorPagina(doc) });
-
+  estrategias.push({ nombre: "una-por-pagina", segmentos: segmentarPorPagina(doc) });
   const columnas = segmentarPorColumnas(doc);
   if (columnas.length) estrategias.push({ nombre: "columnas", segmentos: columnas });
-
   const bloques = segmentarPorBloques(doc);
   if (bloques.length) estrategias.push({ nombre: "bloques", segmentos: bloques });
 
-  const evaluadas: {
-    nombre: string;
-    boletas: BoletaCruda[];
-    puntaje: number;
-  }[] = [];
-
-  for (const estrategia of estrategias) {
-    if (estrategia.segmentos.length === 0) continue;
-    const boletas = estrategia.segmentos.map((s) => construirBoleta(s, opciones));
-    evaluadas.push({
-      nombre: estrategia.nombre,
-      boletas,
-      puntaje: puntuarBoletas(boletas, opciones.cantidadPartidos),
+  const evaluadas = estrategias
+    .filter((e) => e.segmentos.length > 0)
+    .map((e) => {
+      const boletas = e.segmentos.map((s) => construirBoleta(s, cantidadPartidos));
+      return { nombre: e.nombre, boletas, puntaje: puntuar(boletas, cantidadPartidos) };
     });
-  }
 
-  if (evaluadas.length === 0) {
-    return {
-      boletas: [],
-      estrategia: "ninguna",
-      puntaje: 0,
-      estrategiasEvaluadas: [],
-    };
-  }
+  if (evaluadas.length === 0) return { boletas: [], estrategia: "ninguna", puntaje: 0 };
 
   evaluadas.sort((a, b) => b.puntaje - a.puntaje);
   const ganadora = evaluadas[0];
-
-  return {
-    boletas: ganadora.boletas,
-    estrategia: ganadora.nombre,
-    puntaje: ganadora.puntaje,
-    estrategiasEvaluadas: evaluadas.map((e) => ({
-      nombre: e.nombre,
-      boletas: e.boletas.length,
-      puntaje: e.puntaje,
-    })),
-  };
+  return { boletas: ganadora.boletas, estrategia: ganadora.nombre, puntaje: ganadora.puntaje };
 }

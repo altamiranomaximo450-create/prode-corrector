@@ -40,6 +40,7 @@ import {
   borrarPaginasAcumuladas,
   descargarChunk,
   guardarChunkExtraido,
+  limpiarSubidasAbandonadas,
   latir,
   leerPaginasAcumuladas,
   marcarChunkEstado,
@@ -364,6 +365,15 @@ async function main() {
   }
 
   console.log(`[worker] ${WORKER_ID} arrancando (${drenar ? "drenar la cola" : "bucle"})...`);
+
+  // Las subidas que alguien empezó y abandonó dejan pedazos de PDF ocupando
+  // lugar en Storage. Se limpian de paso, una vez por arranque.
+  try {
+    const limpiados = await limpiarSubidasAbandonadas();
+    if (limpiados > 0) console.log(`[worker] ${limpiados} subida(s) abandonada(s) borradas.`);
+  } catch (e) {
+    console.warn(`[worker] no se pudieron limpiar las subidas abandonadas: ${mensajeDe(e)}`);
+  }
 
   let vacioDesde = Date.now();
   while (!apagando) {

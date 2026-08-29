@@ -97,10 +97,21 @@ for (let i = 0; i < PARTES; i++) {
   for (const p of copiadas) nuevo.addPage(p);
   const bytes = await nuevo.save();
   const storagePath = `${fecha.id}/${trabajo.id}/parte-${String(i).padStart(5, "0")}.pdf`;
-  const { error } = await supabase()
-    .storage.from(BUCKET_PDFS)
-    .upload(storagePath, bytes, { contentType: "application/pdf", upsert: true });
-  if (error) fallar(`no se pudo subir la parte ${i}: ${error.message}`);
+  // La subida se reintenta: un corte de red mientras se prepara la prueba no
+  // dice nada sobre lo que la prueba quiere verificar.
+  let ultimo = "";
+  let subida = false;
+  for (let intento = 1; intento <= 4 && !subida; intento++) {
+    const { error } = await supabase()
+      .storage.from(BUCKET_PDFS)
+      .upload(storagePath, bytes, { contentType: "application/pdf", upsert: true });
+    if (!error) subida = true;
+    else {
+      ultimo = error.message;
+      await dormir(1000 * intento);
+    }
+  }
+  if (!subida) fallar(`no se pudo subir la parte ${i}: ${ultimo}`);
   await agregarChunk(trabajo.id, {
     indice: i,
     paginaDesde: desde + 1,
@@ -174,7 +185,10 @@ if (hechas >= PARTES) {
 }
 
 const confirmadasAntes = await partesConfirmadas();
-console.log(`   ${hechas} de ${PARTES} partes listas. Matando el proceso de golpe (SIGKILL).`);
+console.log(
+  `   ${hechas} de ${PARTES} partes listas [${[...confirmadasAntes].join(", ")}]. ` +
+    "Matando el proceso de golpe (SIGKILL).",
+);
 primero.kill("SIGKILL");
 await dormir(500);
 

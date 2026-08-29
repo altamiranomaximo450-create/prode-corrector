@@ -407,3 +407,32 @@ export async function borrarChunksDeStorage(paths: string[]): Promise<void> {
   if (paths.length === 0) return;
   await supabase().storage.from(BUCKET_PDFS).remove(paths);
 }
+
+/**
+ * Tira las subidas que quedaron a medias.
+ *
+ * Si alguien empieza a subir un PDF y cierra la pestaña, el trabajo se queda en
+ * "subiendo" para siempre y sus pedazos ocupan lugar en Storage. Nadie los va a
+ * usar: para procesarse, un trabajo tiene que haber pasado por "encolar". Se
+ * borran los que llevan más de un día así, con todo lo que hayan subido.
+ *
+ * Devuelve cuántos se limpiaron. Es best-effort: si algo falla, se ignora — no
+ * puede impedir que se procesen los trabajos de verdad.
+ */
+export async function limpiarSubidasAbandonadas(horas = 24): Promise<number> {
+  const limite = new Date(Date.now() - horas * 3600_000).toISOString();
+  const { data, error } = await supabase()
+    .from("prode_trabajos")
+    .select("id,chunks")
+    .eq("estado", "subiendo")
+    .lt("creado_en", limite)
+    .limit(50);
+  if (error || !data?.length) return 0;
+
+  for (const fila of data) {
+    const paths = ((fila.chunks as ChunkTrabajo[]) ?? []).map((c) => c.storagePath);
+    await borrarChunksDeStorage(paths).catch(() => undefined);
+    await supabase().from("prode_trabajos").delete().eq("id", fila.id);
+  }
+  return data.length;
+}

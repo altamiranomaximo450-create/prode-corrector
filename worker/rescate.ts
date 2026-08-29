@@ -1,12 +1,13 @@
 /**
- * Puente con worker/extraer.py: PyMuPDF y, si hace falta, OCR con Tesseract.
+ * Puente con worker/extraer.py, que es donde se leen las páginas que pdfjs no
+ * pudo: la capa de texto con PyMuPDF, las casillas marcadas mirando la imagen
+ * (worker/marcas.py) y los textos con OCR (worker/ocr.py).
  *
  * Por qué existe: pdfjs lee muy bien los PDFs "normales" y es el camino afinado
  * contra el formato de las boletas, pero deja vacías las páginas que son una
- * imagen (un escaneo, una foto) y algunas con fuentes rotas. Este módulo se
- * ocupa SOLO de esas páginas: PyMuPDF primero, OCR después, y siempre
- * devolviendo el mismo formato que pdfjs para que el analizador no se entere de
- * por dónde vino cada página.
+ * imagen —una foto, una captura de pantalla— y algunas con fuentes rotas. Este
+ * módulo se ocupa SOLO de esas páginas, y siempre devuelve el mismo formato que
+ * pdfjs para que el analizador no se entere de por dónde vino cada página.
  *
  * Es opcional a propósito. Si en la máquina no hay Python o no está PyMuPDF, se
  * avisa una vez y el procesamiento sigue: esas páginas quedan vacías, pero
@@ -38,7 +39,7 @@ interface ItemPy {
 /**
  * De dónde salió el contenido de la página:
  *   pymupdf     capa de texto que pdfjs no pudo leer
- *   ocr         imagen leída con Tesseract
+ *   ocr         imagen leída con OCR
  *   marcas      boleta gráfica: casillas detectadas en la imagen
  *   marcas+ocr  las dos cosas (lo habitual en una boleta gráfica con nombre)
  *   sin-texto   no se pudo sacar nada
